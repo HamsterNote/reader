@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 export type OutlineTreeNode = {
   readonly id: string
@@ -161,12 +161,16 @@ export function OutlineTree({
   currentPage,
   pageNumbers,
   documentKey,
+  initialCollapsed,
+  onCollapsedChange,
   onNavigate
 }: {
   readonly items: readonly OutlineTreeNode[]
   readonly currentPage: number | null
   readonly pageNumbers?: readonly number[]
   readonly documentKey?: unknown
+  readonly initialCollapsed?: ReadonlySet<string>
+  readonly onCollapsedChange?: (next: ReadonlySet<string>) => void
   readonly onNavigate: (node: OutlineTreeNode) => void
 }) {
   const activeId = useMemo(
@@ -174,20 +178,30 @@ export function OutlineTree({
     [items, currentPage, pageNumbers]
   )
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(
-    () => new Set()
+    () => new Set(initialCollapsed ?? [])
   )
-  useEffect(() => setCollapsed(new Set()), [documentKey])
+  const initialCollapsedRef = useRef(initialCollapsed)
+  initialCollapsedRef.current = initialCollapsed
+  const onCollapsedChangeRef = useRef(onCollapsedChange)
+  onCollapsedChangeRef.current = onCollapsedChange
+  useEffect(() => {
+    const next = initialCollapsedRef.current
+      ? new Set(initialCollapsedRef.current)
+      : new Set<string>()
+    setCollapsed(next)
+    onCollapsedChangeRef.current?.(next)
+  }, [documentKey])
   const markedId = useMemo(
     () => findVisibleOutlineNodeId(items, activeId, collapsed),
     [items, activeId, collapsed]
   )
-  const toggle = (id: string) =>
-    setCollapsed((current) => {
-      const next = new Set(current)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const toggle = (id: string) => {
+    const next = new Set(collapsed)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setCollapsed(next)
+    onCollapsedChangeRef.current?.(next)
+  }
   return (
     <OutlineItems
       items={items}

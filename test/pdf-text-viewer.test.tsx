@@ -693,6 +693,43 @@ describe('PDF text mode outline', () => {
     expect(outlineDocumentMock.open).toHaveBeenCalledTimes(2)
   })
 
+  it('keeps collapsed branches when switching away from 目录 and back', async () => {
+    const fixture = documentFixture('outline-session', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [
+        {
+          title: '第一章',
+          dest: [0],
+          items: [{ title: '1.1 小节', dest: [1], items: [] }]
+        }
+      ]
+    })
+    render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={pdfOutlineSource(proxy)}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    await screen.findByRole('button', { name: '1.1 小节' })
+    fireEvent.click(screen.getByRole('button', { name: '收起 第一章' }))
+    expect(screen.queryByRole('button', { name: '1.1 小节' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: '高亮' }))
+    fireEvent.click(screen.getByRole('tab', { name: '目录' }))
+    await screen.findByRole('button', { name: '第一章' })
+    expect(screen.queryByRole('button', { name: '1.1 小节' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '展开 第一章' }))
+    expect(screen.getByRole('button', { name: '1.1 小节' })).toBeInTheDocument()
+  })
+
   it('aborts a pending fallback open when the outline panel unmounts', async () => {
     outlineDocumentMock.open.mockReset()
     const fixture = documentFixture('abort-outline', 6)

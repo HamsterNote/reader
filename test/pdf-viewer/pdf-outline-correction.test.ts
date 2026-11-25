@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   correctOutlineTitlePages,
+  findTrustedOutlinePage,
   normalizeOutlineTitle,
   OUTLINE_TITLE_SEARCH_LIMIT,
   pageStartsWithOutlineTitle
@@ -200,5 +201,96 @@ describe('correctOutlineTitlePages', () => {
       { id: 'ch1', title: '第一章', pageNumber: 2 }
     ])
     expect(corrections.get('ch1')).toBe(2)
+  })
+})
+
+describe('findTrustedOutlinePage', () => {
+  it('finds the nearest preceding chapter when a jump lands mid-chapter', async () => {
+    const { document, getPage } = makeTextDocument(
+      {
+        37: '常常指代更谨慎的网络行为。',
+        178: '第七章 维特效应',
+        180: '截至2006年，其相关网站也有500多家。'
+      },
+      300
+    )
+    const match = await findTrustedOutlinePage(
+      document,
+      [{ id: 'ch7', title: '第七章 维特效应', pageNumber: 37 }],
+      180
+    )
+    expect(match).toMatchObject({
+      id: 'ch7',
+      annotatedPage: 37,
+      pageNumber: 178,
+      standalone: true
+    })
+    const pages = getPage.mock.calls.map(([page]) => page)
+    expect(pages.slice(0, 3)).toEqual([180, 179, 178])
+    expect(pages).toContain(37)
+  })
+
+  it('never corrects backwards to a page before the annotated page', async () => {
+    const { document } = makeTextDocument({
+      2: 'Intro',
+      5: 'Intro'
+    })
+    const match = await findTrustedOutlinePage(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
+      2
+    )
+    expect(match).toBeNull()
+  })
+
+  it('keeps a correct annotated page when a nearby page repeats the title as its only header', async () => {
+    const { document } = makeTextDocument({
+      5: 'Intro\n正文从这里开始',
+      7: 'Intro\n这一页只是重复页眉'
+    })
+    const match = await findTrustedOutlinePage(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
+      7
+    )
+    expect(match).toMatchObject({
+      id: 'intro',
+      annotatedPage: 5,
+      pageNumber: 5
+    })
+  })
+
+  it('accepts a later standalone heading only with multiple consecutive titles as evidence', async () => {
+    const { document } = makeTextDocument({
+      5: 'Another Chapter\n正文',
+      6: 'Another Chapter\n正文',
+      7: 'Intro\n正文'
+    })
+    const match = await findTrustedOutlinePage(
+      document,
+      [
+        { id: 'intro', title: 'Intro', pageNumber: 5 },
+        { id: 'another', title: 'Another Chapter', pageNumber: 5 }
+      ],
+      7
+    )
+    expect(match).toMatchObject({
+      id: 'intro',
+      annotatedPage: 5,
+      pageNumber: 7
+    })
+  })
+
+  it('accepts a later heading when the annotated page has no title at all', async () => {
+    const { document } = makeTextDocument({
+      5: '正文中没有章节标题',
+      7: 'Intro\n正文'
+    })
+    const match = await findTrustedOutlinePage(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
+      7
+    )
+    expect(match).toMatchObject({ id: 'intro', pageNumber: 7 })
   })
 })

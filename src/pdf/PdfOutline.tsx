@@ -2,10 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineTreeNode } from '../components/OutlineTree'
 import { OutlineTree } from '../components/OutlineTree'
 import { usePositionTransaction } from '../components/reading/usePositionTransaction'
-import {
-  findOutlineTitleMatches,
-  readOutlinePageHeadText
-} from './pdfOutlineTitleCorrection'
+import { findTrustedOutlinePage } from './pdfOutlineTitleCorrection'
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 const PDF_OUTLINE_TIMEOUT_MS = 10_000
@@ -28,16 +25,35 @@ type OutlineState = {
   readonly items: readonly PdfOutlineItem[]
 }
 
+export type PdfOutlineSessionState = {
+  collapsed: Set<string>
+  readonly corrections: Map<string, number>
+  mismatchDetected: boolean
+}
+
+export function createPdfOutlineSessionState(): PdfOutlineSessionState {
+  return {
+    collapsed: new Set(),
+    corrections: new Map(),
+    mismatchDetected: false
+  }
+}
+
 type PageCache = {
   readonly items: readonly PdfOutlineItem[]
-  readonly pageById: Map<string, number>
+  readonly annotatedById: Map<string, number>
+  readonly correctedById: Map<string, number>
+  mismatchDetected: boolean
   resolved?: Promise<void>
 }
 
 type PageSnapshot = {
   readonly document: PDFDocumentProxy
   readonly items: readonly PdfOutlineItem[]
-  readonly pageById: ReadonlyMap<string, number>
+  readonly annotatedById: ReadonlyMap<string, number>
+  readonly correctedById: ReadonlyMap<string, number>
+  readonly mismatchDetected: boolean
+  readonly complete: boolean
 }
 
 function normalizeOutline(
@@ -139,7 +155,7 @@ function collectTargets(
 async function resolveOutlinePages(
   document: PDFDocumentProxy,
   items: readonly PdfOutlineItem[],
-  pageById: Map<string, number>
+  annotatedById: Map<string, number>
 ): Promise<void> {
   const targets: PdfOutlineTarget[] = []
   collectTargets(items, targets)
@@ -153,22 +169,31 @@ async function resolveOutlinePages(
     )
   )
   for (const [id, pageNumber] of entries) {
-    if (pageNumber !== null) pageById.set(id, pageNumber)
+    if (pageNumber !== null) annotatedById.set(id, pageNumber)
   }
 }
 
 function toOutlineNodes(
   items: readonly PdfOutlineItem[],
-  pageById: ReadonlyMap<string, number> | null
+  snapshot: PageSnapshot | null
 ): readonly OutlineTreeNode[] {
   return items.map((item) => {
     const disabled = !item.destination || item.external
+    let targetPage: number | null = null
+    if (!disabled && snapshot) {
+      const corrected = snapshot.correctedById.get(item.id)
+      const annotated = snapshot.annotatedById.get(item.id)
+      // 文档已出现标注页与真实页不符的证据后，未经验证的候选不参与高亮；
+      // 点击仍会即时使用标注页，避免把用户带到错误页还高亮成另一章。
+      targetPage =
+        corrected ?? (snapshot.mismatchDetected ? null : (annotated ?? null))
+    }
     return {
       id: item.id,
       label: item.title,
-      targetPage: disabled ? null : (pageById?.get(item.id) ?? null),
+      targetPage,
       disabled,
-      children: toOutlineNodes(item.items, pageById)
+      children: toOutlineNodes(item.items, snapshot)
     }
   })
 }
@@ -186,11 +211,11 @@ function indexOutlineItems(
 
 function collectTitleTargets(
   items: readonly PdfOutlineItem[],
-  pageById: ReadonlyMap<string, number>,
+  annotatedById: ReadonlyMap<string, number>,
   out: { id: string; title: string; pageNumber: number }[] = []
 ) {
   for (const item of items) {
-    const pageNumber = pageById.get(item.id)
+    const pageNumber = annotatedById.get(item.id)
     if (
       pageNumber !== undefined &&
       item.destination &&
@@ -199,7 +224,7 @@ function collectTitleTargets(
     ) {
       out.push({ id: item.id, title: item.title, pageNumber })
     }
-    collectTitleTargets(item.items, pageById, out)
+    collectTitleTargets(item.items, annotatedById, out)
   }
   return out
 }
@@ -207,14 +232,50 @@ function collectTitleTargets(
 function pageCacheFor(
   caches: WeakMap<PDFDocumentProxy, PageCache>,
   document: PDFDocumentProxy,
-  items: readonly PdfOutlineItem[]
+  items: readonly PdfOutlineItem[],
+  session: PdfOutlineSessionState
 ): PageCache {
   let cache = caches.get(document)
   if (!cache || cache.items !== items) {
-    cache = { items, pageById: new Map() }
+    cache = {
+      items,
+      annotatedById: new Map(),
+      correctedById: new Map(session.corrections),
+      mismatchDetected: session.mismatchDetected
+    }
     caches.set(document, cache)
   }
   return cache
+}
+
+function snapshotFromCache(
+  document: PDFDocumentProxy,
+  items: readonly PdfOutlineItem[],
+  cache: PageCache,
+  complete: boolean
+): PageSnapshot {
+  return {
+    document,
+    items,
+    annotatedById: cache.annotatedById,
+    correctedById: new Map(cache.correctedById),
+    mismatchDetected: cache.mismatchDetected,
+    complete
+  }
+}
+
+function snapshotMatches(
+  snapshot: PageSnapshot | null,
+  document: PDFDocumentProxy | null,
+  items: readonly PdfOutlineItem[] | null
+): boolean {
+  return Boolean(
+    snapshot &&
+    document &&
+    items &&
+    snapshot.document === document &&
+    snapshot.items === items
+  )
 }
 
 export function PdfOutline({
@@ -222,13 +283,15 @@ export function PdfOutline({
   isActive,
   currentPageNumber,
   pageNumbers,
-  onNavigate
+  onNavigate,
+  sessionState
 }: {
   readonly document: PDFDocumentProxy | null
   readonly isActive: boolean
   readonly currentPageNumber?: number | null
   readonly pageNumbers: readonly number[]
   readonly onNavigate: (pageNumber: number) => void
+  readonly sessionState?: PdfOutlineSessionState
 }) {
   const successful = useRef(
     new WeakMap<PDFDocumentProxy, readonly PdfOutlineItem[]>()
@@ -237,6 +300,11 @@ export function PdfOutline({
     new WeakMap<PDFDocumentProxy, Promise<readonly PdfOutlineItem[]>>()
   )
   const pageCaches = useRef(new WeakMap<PDFDocumentProxy, PageCache>())
+  const internalSession = useRef<PdfOutlineSessionState | null>(null)
+  if (internalSession.current === null) {
+    internalSession.current = createPdfOutlineSessionState()
+  }
+  const session = sessionState ?? internalSession.current
   const latest = useRef({ document, pageNumbers, onNavigate })
   latest.current = { document, pageNumbers, onNavigate }
   const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
@@ -246,13 +314,23 @@ export function PdfOutline({
   const [pageSnapshot, setPageSnapshot] = useState<PageSnapshot | null>(null)
   const hasCurrentPage =
     currentPageNumber !== null && currentPageNumber !== undefined
+  const pageIsVisible =
+    hasCurrentPage && pageNumbers.includes(currentPageNumber as number)
 
   useEffect(() => {
     if (!document || !isActive) return
     let current = true
     const cached = successful.current.get(document)
     if (cached) {
-      setState({ document, status: 'ready', items: cached })
+      // 重新打开目录时沿用同一个 ready state，避免仅仅切换可见性就
+      // 触发一次新的页首读取 effect。
+      setState((currentState) =>
+        currentState?.document === document &&
+        currentState.status === 'ready' &&
+        currentState.items === cached
+          ? currentState
+          : { document, status: 'ready', items: cached }
+      )
       return
     }
 
@@ -291,75 +369,102 @@ export function PdfOutline({
       return
     }
     let current = true
-    const entry = pageCacheFor(pageCaches.current, document, state.items)
+    const entry = pageCacheFor(
+      pageCaches.current,
+      document,
+      state.items,
+      session
+    )
     if (!entry.resolved) {
       entry.resolved = resolveOutlinePages(
         document,
         state.items,
-        entry.pageById
+        entry.annotatedById
       ).catch(() => undefined)
     }
     entry.resolved.then(() => {
       if (!current) return
-      setPageSnapshot({
-        document,
-        items: state.items,
-        pageById: new Map(entry.pageById)
-      })
+      setPageSnapshot(snapshotFromCache(document, state.items, entry, true))
     })
     return () => {
       current = false
     }
-  }, [document, hasCurrentPage, state])
+  }, [document, hasCurrentPage, session, state])
 
-  // 只在目录可见时按当前页做一次页首匹配：不预扫全书，退出目录或换书
-  // 立即取消后续读取；当前页标题命中后，高亮和后续点击都使用真实页。
+  const annotationSnapshot = snapshotMatches(
+    pageSnapshot,
+    document,
+    state?.items ?? null
+  )
+    ? pageSnapshot
+    : null
+  const annotationsReady = annotationSnapshot?.complete === true
+
+  // 跳页/恢复位置后从当前页向回做小窗口匹配：找到最近章节标题即停。
+  // 依赖里只放文档、页号、可见性和目录条目，校正快照变化不取消读取，
+  // 因此首次读取不会因目标页快照更新而失败，也不会复用旧 signal。
   useEffect(() => {
-    const pageNumber = currentPageNumber
     if (
       !document ||
       !isActive ||
-      pageNumber === null ||
-      pageNumber === undefined ||
+      !annotationsReady ||
       !state ||
       state.document !== document ||
       state.status !== 'ready' ||
-      !pageNumbers.includes(pageNumber) ||
+      currentPageNumber === null ||
+      currentPageNumber === undefined ||
+      !pageIsVisible ||
       typeof document.getPage !== 'function'
     ) {
       return
     }
+    const pageNumber = currentPageNumber
     const controller = new AbortController()
     let current = true
-    readOutlinePageHeadText(document, pageNumber, {
-      signal: controller.signal
-    })
-      .then((text) => {
-        if (!current || controller.signal.aborted) return
-        const entry = pageCacheFor(pageCaches.current, document, state.items)
-        const matches = findOutlineTitleMatches(
-          text,
-          collectTitleTargets(state.items, entry.pageById)
-        )
-        let changed = false
-        for (const match of matches) {
-          if (entry.pageById.get(match.id) === pageNumber) continue
-          entry.pageById.set(match.id, pageNumber)
-          changed = true
+    const cache = pageCacheFor(
+      pageCaches.current,
+      document,
+      state.items,
+      session
+    )
+    findTrustedOutlinePage(
+      document,
+      collectTitleTargets(state.items, cache.annotatedById),
+      pageNumber,
+      { signal: controller.signal }
+    )
+      .then((match) => {
+        if (!current || controller.signal.aborted || !match) return
+        const annotatedPage = cache.annotatedById.get(match.id)
+        if (
+          annotatedPage === undefined ||
+          match.pageNumber < annotatedPage ||
+          cache.correctedById.has(match.id)
+        ) {
+          return
         }
-        if (!changed) return
-        setPageSnapshot({
-          document,
-          items: state.items,
-          pageById: new Map(entry.pageById)
-        })
+        cache.correctedById.set(match.id, match.pageNumber)
+        session.corrections.set(match.id, match.pageNumber)
+        if (match.pageNumber !== annotatedPage) {
+          cache.mismatchDetected = true
+          session.mismatchDetected = true
+        }
+        setPageSnapshot(snapshotFromCache(document, state.items, cache, true))
       })
       .catch(() => undefined)
     return () => {
       current = false
       controller.abort()
     }
-  }, [currentPageNumber, document, isActive, pageNumbers, pageSnapshot, state])
+  }, [
+    annotationsReady,
+    currentPageNumber,
+    document,
+    isActive,
+    pageIsVisible,
+    session,
+    state
+  ])
 
   const itemById = useMemo(
     () => (state?.status === 'ready' ? indexOutlineItems(state.items) : null),
@@ -370,13 +475,10 @@ export function PdfOutline({
     if (!state || state.status !== 'ready' || state.document !== document) {
       return [] as readonly OutlineTreeNode[]
     }
-    const pageById =
-      pageSnapshot &&
-      pageSnapshot.document === document &&
-      pageSnapshot.items === state.items
-        ? pageSnapshot.pageById
-        : null
-    return toOutlineNodes(state.items, pageById)
+    return toOutlineNodes(
+      state.items,
+      snapshotMatches(pageSnapshot, document, state.items) ? pageSnapshot : null
+    )
   }, [document, pageSnapshot, state])
 
   const navigate = async (item: PdfOutlineItem | undefined) => {
@@ -391,13 +493,16 @@ export function PdfOutline({
     let cache: PageCache | undefined
     let effectivePage: number | undefined
     if (readyState) {
-      cache = pageCacheFor(pageCaches.current, owner, readyState.items)
-      effectivePage = cache.pageById.get(item.id)
+      cache = pageCacheFor(pageCaches.current, owner, readyState.items, session)
+      effectivePage =
+        cache.correctedById.get(item.id) ?? cache.annotatedById.get(item.id)
     }
+    let resolvedFromDestination = false
     if (effectivePage === undefined) {
       const resolved = await resolveOutlinePage(owner, item.destination)
       if (resolved === null) return
       effectivePage = resolved
+      resolvedFromDestination = true
     }
     if (
       !isNavigationCurrent(transaction) ||
@@ -406,13 +511,19 @@ export function PdfOutline({
     ) {
       return
     }
-    if (readyState && cache) {
-      cache.pageById.set(item.id, effectivePage)
-      setPageSnapshot({
-        document: owner,
-        items: readyState.items,
-        pageById: new Map(cache.pageById)
-      })
+    if (
+      readyState &&
+      cache &&
+      resolvedFromDestination &&
+      cache.annotatedById.get(item.id) !== effectivePage
+    ) {
+      cache.annotatedById.set(item.id, effectivePage)
+      const complete = snapshotMatches(pageSnapshot, owner, readyState.items)
+        ? Boolean(pageSnapshot?.complete)
+        : false
+      setPageSnapshot(
+        snapshotFromCache(owner, readyState.items, cache, complete)
+      )
     }
     latest.current.onNavigate(effectivePage)
   }
@@ -440,6 +551,14 @@ export function PdfOutline({
       currentPage={currentPageNumber ?? null}
       pageNumbers={pageNumbers}
       documentKey={document}
+      initialCollapsed={sessionState ? session.collapsed : undefined}
+      onCollapsedChange={
+        sessionState
+          ? (next) => {
+              session.collapsed = new Set(next)
+            }
+          : undefined
+      }
       onNavigate={(node) => void navigate(itemById?.get(node.id))}
     />
   )

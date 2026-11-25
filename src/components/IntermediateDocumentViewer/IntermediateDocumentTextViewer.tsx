@@ -1,6 +1,7 @@
 import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
-import { PdfOutline } from '../../pdf/PdfOutline'
+import { createPdfOutlineSessionState, PdfOutline } from '../../pdf/PdfOutline'
+import type { PdfOutlineSessionState } from '../../pdf/PdfOutline'
 import { openPdfOutlineDocument } from '../../pdf/pdfOutlineDocument'
 import type { PDFDocumentProxy } from '../../pdf/pdfjsRuntime'
 import { RangeMagnifierProvider } from './RangeMagnifier'
@@ -939,6 +940,7 @@ function PdfTextOutlinePanel({
   loadDocument,
   currentPageNumber,
   pageNumbers,
+  sessionState,
   onNavigate
 }: {
   readonly active: boolean
@@ -946,6 +948,7 @@ function PdfTextOutlinePanel({
   readonly loadDocument?: PdfOutlineLoader
   readonly currentPageNumber?: number | null
   readonly pageNumbers: readonly number[]
+  readonly sessionState: PdfOutlineSessionState
   readonly onNavigate: (pageNumber: number) => void
 }) {
   const [attempt, setAttempt] = useState(0)
@@ -998,6 +1001,7 @@ function PdfTextOutlinePanel({
         isActive={active}
         currentPageNumber={currentPageNumber}
         pageNumbers={pageNumbers}
+        sessionState={sessionState}
         onNavigate={onNavigate}
       />
     )
@@ -1335,6 +1339,20 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
     ? props.pdfSource?.loadPdfDocument
     : undefined
   const pdfOutlineSource = isPdf ? props.pdfSource : undefined
+  // 折叠集合与校正页缓存挂在当前阅读会话上：目录隐藏时 PdfOutline 会
+  // 卸载并释放自有 PDF 代理，但同一本书再次打开目录时仍恢复这些状态。
+  const pdfOutlineSessionsRef = useRef(
+    new WeakMap<ReaderEngineSource, PdfOutlineSessionState>()
+  )
+  const pdfOutlineSession = useMemo(() => {
+    if (!pdfOutlineSource) return undefined
+    let session = pdfOutlineSessionsRef.current.get(pdfOutlineSource)
+    if (!session) {
+      session = createPdfOutlineSessionState()
+      pdfOutlineSessionsRef.current.set(pdfOutlineSource, session)
+    }
+    return session
+  }, [pdfOutlineSource])
   const flowReadinessRef = useRef<ReturnType<
     typeof createFlowTextReadiness
   > | null>(null)
@@ -1954,7 +1972,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   )
   const pdfTextOutline = useMemo(
     () =>
-      pdfOutlineSource
+      pdfOutlineSource && pdfOutlineSession
         ? (isActive: boolean) => (
             <PdfTextOutlinePanel
               active={isActive}
@@ -1962,6 +1980,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
               loadDocument={loadPdfOutlineDocument}
               currentPageNumber={readingProgress.currentPageNumber}
               pageNumbers={pageNumbers}
+              sessionState={pdfOutlineSession}
               onNavigate={handleReadingProgressSeekPage}
             />
           )
@@ -1970,6 +1989,7 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
       handleReadingProgressSeekPage,
       loadPdfOutlineDocument,
       pageNumbers,
+      pdfOutlineSession,
       pdfOutlineSource,
       readingProgress.currentPageNumber
     ]
