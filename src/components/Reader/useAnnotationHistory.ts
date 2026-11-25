@@ -72,16 +72,70 @@ type History = {
 export { paintingContentKey } from '../../painting/paintingContent'
 import { paintingContentKey } from '../../painting/paintingContent'
 import type { ReaderPagePaintingMap } from '../Page'
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value)
+/**
+ * Canonical form used to recognize echoes: sorted keys, no `undefined`, empty
+ * objects (e.g. persisted defaults such as `selectionStyle: {}`) dropped.
+ */
+const canonical = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(canonical)
+  if (!isRecord(value)) return value
+  const sorted: Record<string, unknown> = {}
+  Object.keys(value)
+    .sort()
+    .forEach((key) => {
+      const child = canonical(value[key])
+      if (child === undefined) return
+      if (isRecord(child) && Object.keys(child).length === 0) return
+      sorted[key] = child
+    })
+  return sorted
+}
+const canonicalJson = (value: unknown) => JSON.stringify(canonical(value))
+const sameValue = (a: unknown, b: unknown) =>
+  canonicalJson(a) === canonicalJson(b)
+const paintingJson = (value: ReaderPagePaintingMap | undefined) =>
+  canonicalJson(JSON.parse(paintingContentKey(value)) as unknown)
 const sameContent = (
   a: ReaderAnnotationHistoryValue,
   b: ReaderAnnotationHistoryValue
 ) =>
-  JSON.stringify(a.ranges) === JSON.stringify(b.ranges) &&
-  JSON.stringify(a.rects) === JSON.stringify(b.rects) &&
-  paintingContentKey(a.pagePaintings) === paintingContentKey(b.pagePaintings)
-const copy = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-const sameValue = (a: unknown, b: unknown) =>
-  JSON.stringify(a) === JSON.stringify(b)
+  canonicalJson(a.ranges) === canonicalJson(b.ranges) &&
+  canonicalJson(a.rects) === canonicalJson(b.rects) &&
+  paintingJson(a.pagePaintings) === paintingJson(b.pagePaintings)
+const copy = <T>(value: T): T =>
+  value === undefined ? value : (JSON.parse(JSON.stringify(value)) as T)
+/**
+ * Three-way field merge of one annotation (base = current value, local = the
+ * retained history snapshot, external = the host's latest value). Fields the
+ * local stack changed keep the history value; fields it did not touch take the
+ * host's value, so independent external edits survive undo/redo. Same-leaf
+ * conflicts resolve to history.
+ */
+function mergeFields(
+  base: unknown,
+  local: unknown,
+  external: unknown
+): unknown {
+  if (sameValue(local, external)) return local
+  if (sameValue(local, base)) return copy(external)
+  if (sameValue(external, base)) return local
+  if (isRecord(base) && isRecord(local) && isRecord(external)) {
+    const merged: Record<string, unknown> = {}
+    const keys = new Set([
+      ...Object.keys(base),
+      ...Object.keys(local),
+      ...Object.keys(external)
+    ])
+    keys.forEach((key) => {
+      const value = mergeFields(base[key], local[key], external[key])
+      if (value !== undefined) merged[key] = value
+    })
+    return merged
+  }
+  return local
+}
 /** Replays an external snapshot's changes onto a retained history snapshot. */
 function mergeIdentified<T extends { readonly id: string }>(
   target: readonly T[],
@@ -95,13 +149,8 @@ function mergeIdentified<T extends { readonly id: string }>(
     const previousItem = previousById.get(item.id)
     const nextItem = nextById.get(item.id)
     if (!nextItem && previousItem) return
-    if (
-      nextItem &&
-      previousItem &&
-      !sameValue(previousItem, nextItem) &&
-      sameValue(item, previousItem)
-    ) {
-      merged.set(item.id, copy(nextItem))
+    if (nextItem && previousItem) {
+      merged.set(item.id, mergeFields(previousItem, item, nextItem) as T)
       return
     }
     merged.set(item.id, item)
@@ -119,6 +168,12 @@ function mergeIdentified<T extends { readonly id: string }>(
   })
   return ordered
 }
+const pagePaintingKey = (pageId: string, doc: unknown) =>
+  paintingContentKey(
+    isRecord(doc) && 'objects' in doc
+      ? ({ [pageId]: doc } as ReaderPagePaintingMap)
+      : {}
+  )
 function mergePagePaintings(
   target: ReaderPagePaintingMap,
   previous: ReaderPagePaintingMap,
@@ -131,20 +186,32 @@ function mergePagePaintings(
     const previousDoc = previous[pageId]
     const nextDoc = next[pageId]
     if (!nextDoc) {
+      // Externally removed pages stay removed; pages only the snapshot knows
+      // (taken back by a local undo) are kept.
       if (!previousDoc && targetDoc) merged[pageId] = targetDoc
       return
     }
     if (!previousDoc) {
-      merged[pageId] = targetDoc ?? copy(nextDoc)
+      merged[pageId] = copy(nextDoc)
       return
     }
-    const externalChanged =
-      paintingContentKey({ [pageId]: previousDoc }) !==
-      paintingContentKey({ [pageId]: nextDoc })
-    merged[pageId] =
-      externalChanged && (!targetDoc || sameValue(targetDoc, previousDoc))
-        ? copy(nextDoc)
-        : (targetDoc ?? copy(nextDoc))
+    if (
+      pagePaintingKey(pageId, previousDoc) === pagePaintingKey(pageId, nextDoc)
+    ) {
+      // The host did not change this page: keep the snapshot's own value,
+      // including a missing page (e.g. undoing the first stroke).
+      if (targetDoc) merged[pageId] = targetDoc
+      return
+    }
+    if (
+      targetDoc &&
+      pagePaintingKey(pageId, targetDoc) !==
+        pagePaintingKey(pageId, previousDoc)
+    ) {
+      merged[pageId] = targetDoc
+      return
+    }
+    merged[pageId] = copy(nextDoc)
   })
   return merged
 }
@@ -235,21 +302,27 @@ export function useAnnotationHistory(
     }
     /**
      * External snapshots replace the present value without adding checkpoints.
-     * Their changes are also replayed onto retained snapshots so undo/redo do
-     * not discard annotations another host added in the meantime.
+     * Normalized echoes (same content, e.g. reordered keys or default fields)
+     * only refresh the present value; their changes are also replayed onto
+     * retained snapshots so undo/redo do not discard annotations another host
+     * added or edited in the meantime.
      */
     const syncExternal = (next: ReaderAnnotationHistoryValue) => {
       if (!latest.current.enabled) return
       const current = state.current
       const value = snapshot(next, current.present)
-      if (JSON.stringify(value) === JSON.stringify(current.present)) return
-      const merge = (target: ReaderAnnotationHistoryValue) =>
-        mergeExternalChanges(target, current.present, value)
-      state.current = {
-        past: current.past.map(merge),
-        present: value,
-        future: current.future.map(merge)
-      }
+      if (sameValue(value, current.present)) return
+      state.current = sameContent(value, current.present)
+        ? { ...current, present: value }
+        : {
+            past: current.past.map((target) =>
+              mergeExternalChanges(target, current.present, value)
+            ),
+            present: value,
+            future: current.future.map((target) =>
+              mergeExternalChanges(target, current.present, value)
+            )
+          }
       render()
     }
     const applyTargetSilently = (

@@ -41,18 +41,35 @@ const secondValue = makeValue(
   [makeRange('r1', 'one'), makeRange('r2', 'two')],
   'r2'
 )
+const styledRange = (
+  id: string,
+  backgroundColor: string,
+  color: string
+): ReaderSelectionRange => ({
+  ...makeRange(id, id),
+  markerStyle: { backgroundColor, color }
+})
+const reorderRange = (range: ReaderSelectionRange): ReaderSelectionRange => ({
+  rectsBySelectionId: range.rectsBySelectionId,
+  createdAt: range.createdAt,
+  end: range.end,
+  start: range.start,
+  text: range.text,
+  id: range.id
+})
 
 function renderHistory(
   enabled = true,
   onChange?: (
     next: ReaderAnnotationHistoryValue,
     detail: ReaderAnnotationHistoryChangeDetail
-  ) => void
+  ) => void,
+  initial: ReaderAnnotationHistoryValue = initialValue
 ) {
   return renderHook(() =>
     useAnnotationHistory({
       enabled,
-      initialValue,
+      initialValue: initial,
       onChange
     })
   )
@@ -200,6 +217,156 @@ describe('useAnnotationHistory', () => {
     expect(result.current.getPresent().ranges.map((range) => range.id)).toEqual(
       ['r1', 'r2']
     )
+    expect(result.current.getStatus()).toMatchObject({
+      pastCount: 1,
+      futureCount: 0
+    })
+  })
+
+  it('merges field-only external edits into retained snapshots', () => {
+    const backgroundColorBefore = '#ffff00'
+    const backgroundColorAfter = '#0000ff'
+    const colorBefore = '#000000'
+    const colorAfter = '#ff0000'
+    const { result } = renderHistory(
+      true,
+      undefined,
+      makeValue([styledRange('r1', backgroundColorBefore, colorBefore)], 'r1')
+    )
+    act(() => {
+      result.current.setCheckpoint(
+        makeValue([styledRange('r1', backgroundColorAfter, colorBefore)], 'r1'),
+        'update-range'
+      )
+    })
+    act(() => {
+      result.current.syncSilent(
+        makeValue([styledRange('r1', backgroundColorAfter, colorAfter)], 'r1')
+      )
+    })
+    const style = () => result.current.getPresent().ranges[0]?.markerStyle
+
+    for (let round = 0; round < 2; round += 1) {
+      act(() => {
+        expect(result.current.undo()).toMatchObject({ applied: true })
+      })
+      expect(style()).toEqual({
+        backgroundColor: backgroundColorBefore,
+        color: colorAfter
+      })
+      act(() => {
+        expect(result.current.redo()).toMatchObject({ applied: true })
+      })
+      expect(style()).toEqual({
+        backgroundColor: backgroundColorAfter,
+        color: colorAfter
+      })
+    }
+
+    // Same-field conflict: the local stack changed the background, so the
+    // history value wins for that field while the color still follows the host.
+    act(() => {
+      result.current.syncSilent(
+        makeValue([styledRange('r1', '#00ff00', '#0000ff')], 'r1')
+      )
+    })
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(style()).toEqual({
+      backgroundColor: backgroundColorBefore,
+      color: '#0000ff'
+    })
+  })
+
+  it('keeps a missing page painting when external edits only touch annotations', () => {
+    const { result } = renderHistory()
+    const stroke = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    act(() => {
+      result.current.setCheckpoint(
+        { ...initialValue, pagePaintings: { 'page-1': stroke } },
+        'drawing'
+      )
+    })
+    act(() => {
+      result.current.syncSilent({
+        ...makeValue([makeRange('r1', 'external')]),
+        pagePaintings: { 'page-1': stroke }
+      })
+    })
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().ranges.map((range) => range.id)).toEqual(
+      ['r1']
+    )
+    expect(result.current.getPresent().pagePaintings).toEqual({})
+  })
+
+  it('adopts external painting edits into snapshots that did not change that page', () => {
+    const first = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const extended = drawingFixture({
+      strokes: [
+        { id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] },
+        { id: 'b', tool: 'pen', points: [{ x: 3, y: 4 }] }
+      ]
+    })
+    const { result } = renderHistory(true, undefined, {
+      ...makeValue([]),
+      pagePaintings: { 'page-1': first }
+    })
+    act(() => {
+      result.current.setCheckpoint(
+        {
+          ...makeValue([makeRange('r1', 'one')]),
+          pagePaintings: { 'page-1': first }
+        },
+        'highlight'
+      )
+    })
+    act(() => {
+      result.current.syncSilent({
+        ...makeValue([makeRange('r1', 'one'), makeRange('r2', 'two')]),
+        pagePaintings: { 'page-1': extended }
+      })
+    })
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().pagePaintings?.['page-1']).toEqual(
+      extended
+    )
+  })
+
+  it('treats reordered echoes as no-ops for retained snapshots', () => {
+    const { result } = renderHistory(
+      true,
+      undefined,
+      makeValue([makeRange('r1', 'one')], 'r1')
+    )
+    act(() => {
+      result.current.setCheckpoint(
+        makeValue([makeRange('r1', 'one'), makeRange('r2', 'two')], 'r2'),
+        'highlight'
+      )
+    })
+    const before = JSON.stringify(result.current.getTarget('undo'))
+    act(() => {
+      result.current.syncSilent(
+        makeValue(
+          [
+            reorderRange(makeRange('r1', 'one')),
+            reorderRange(makeRange('r2', 'two'))
+          ],
+          'r2'
+        )
+      )
+    })
+    expect(JSON.stringify(result.current.getTarget('undo'))).toBe(before)
     expect(result.current.getStatus()).toMatchObject({
       pastCount: 1,
       futureCount: 0
