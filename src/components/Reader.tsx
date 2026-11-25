@@ -1249,9 +1249,13 @@ export function Reader({
       JSON.stringify(current.rects) === JSON.stringify(next.rects) &&
       paintingContentKey(current.pagePaintings) ===
         paintingContentKey(next.pagePaintings)
-    if (identityChanged || !sameContent) {
+    if (identityChanged) {
       cancelDrawingInputs()
       history.reset(next, 'reset')
+    } else if (!sameContent) {
+      // 宿主回传的受控快照可能经过持久化规范化（键顺序、默认字段），
+      // 只要还是同一份文档就只同步当前值，保留 undo/redo 栈。
+      history.syncSilent(next)
     }
   }, [
     document,
