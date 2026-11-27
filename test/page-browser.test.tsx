@@ -121,6 +121,28 @@ describe('PageBrowser', () => {
     expect(screen.queryByTestId('page-browser-page-1')).not.toBeInTheDocument()
   })
 
+  it('opens the requested default tab and falls back when it cannot be shown', () => {
+    renderPageBrowser({
+      showPagesTab: false,
+      defaultTab: 'outline',
+      outline: () => <p>目录内容</p>
+    })
+
+    expect(screen.getByRole('tab', { name: '目录' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
+  it('ignores a default tab that has no matching surface', () => {
+    renderPageBrowser({ showPagesTab: false, defaultTab: 'pages' })
+
+    expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  })
+
   it('adds a bookmark for the current visible page', () => {
     // Given: 第 2 页在主视图中可见，且尚未收藏。
     const onTogglePageBookmark = vi.fn()

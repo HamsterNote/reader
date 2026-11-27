@@ -163,9 +163,19 @@ async function checkEpubOutline(context) {
     format: 'epub',
     async run(page) {
       await openPageBrowser(page)
-      await assertDefaultTab(page, '页面')
+      // EPUB has no page previews: 目录 is the only first tab.
+      await assertDefaultTab(page, '目录')
       const panel = page.getByTestId('page-browser-outline-panel')
-      assert.notEqual(await panel.getAttribute('hidden'), null)
+      assert.equal(await panel.getAttribute('hidden'), null)
+      assert.equal(
+        await page.getByRole('tab', { name: '页面', exact: true }).count(),
+        0
+      )
+      assert.deepEqual(await page.getByRole('tab').allTextContents(), [
+        '目录',
+        '高亮',
+        '书签'
+      ])
       assert.equal(
         await page
           .locator(
@@ -175,15 +185,18 @@ async function checkEpubOutline(context) {
         0,
         'outline must not be an independent block above the tabs'
       )
-      const pages = page.getByRole('tab', { name: '页面', exact: true })
       const outline = page.getByRole('tab', { name: '目录', exact: true })
+      const highlights = page.getByRole('tab', { name: '高亮', exact: true })
       assert(
         await outline.evaluate(
           (tab) => tab.parentElement?.getAttribute('role') === 'tablist'
         )
       )
-      await pages.focus()
-      await pages.press('ArrowRight')
+      await outline.focus()
+      await outline.press('ArrowRight')
+      assert.equal(await highlights.getAttribute('aria-selected'), 'true')
+      assert(await highlights.evaluate((tab) => tab === document.activeElement))
+      await highlights.press('ArrowLeft')
       assert.equal(await outline.getAttribute('aria-selected'), 'true')
       assert(await outline.evaluate((tab) => tab === document.activeElement))
       await panel.waitFor({ state: 'visible' })
@@ -207,7 +220,7 @@ async function checkEpubOutline(context) {
       )
       await closePageBrowser(page)
       await openPageBrowser(page)
-      await assertDefaultTab(page, '页面')
+      await assertDefaultTab(page, '目录')
       await assertHighlightAndBookmarkTabs(page)
       await closePageBrowser(page)
     }

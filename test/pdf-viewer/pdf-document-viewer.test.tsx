@@ -925,12 +925,148 @@ describe('PdfDocumentViewer 接线', () => {
       onReadingPositionChange.mockClear()
       await act(async () => {
         fireEvent.scroll(container)
-        await vi.advanceTimersByTimeAsync(32)
+        await vi.advanceTimersByTimeAsync(150)
       })
       expect(page.getBoundingClientRect().top).toBe(44)
       expect(onReadingPositionChange).toHaveBeenLastCalledWith({
         status: 'ready',
         position: { pageNumber: 2, verticalPercentage: 0 }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports the settled page from measured page boxes, not a scroll ratio', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      // 快速滚到第 2 页后立即回到第 1 页：中途不得上报第 2 页。
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60)
+      })
+      container.scrollTop = 0
+      fireEvent.scroll(container)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(160)
+      })
+      expect(
+        onReadingPositionChange.mock.calls.some(
+          ([call]) => call.position?.pageNumber === 2
+        )
+      ).toBe(false)
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'ready',
+        position: { pageNumber: 1, verticalPercentage: 0 }
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('reports a settled scroll once when scrollend arrives before the debounce', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      container.dispatchEvent(new Event('scrollend'))
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(32)
+      })
+      expect(onReadingPositionChange).toHaveBeenCalledTimes(1)
+      view.unmount()
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(200)
+      })
+      expect(onReadingPositionChange).toHaveBeenCalledTimes(1)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the pending settle timer when unmounting mid-scroll', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    const view = renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      onReadingPositionChange.mockClear()
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      expect(vi.getTimerCount()).toBeGreaterThan(0)
+      view.unmount()
+      expect(vi.getTimerCount()).toBe(0)
+      await vi.advanceTimersByTimeAsync(200)
+      expect(onReadingPositionChange).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not report an unmeasured placeholder page as the current page', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    renderViewer({ onReadingPositionChange }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    const placeholder = latestViewer().getPageView(1)!.div
+    placeholder.getBoundingClientRect = () => new DOMRect(0, 0, 400, 0)
+    vi.useFakeTimers()
+    try {
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(160)
+      })
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'pending'
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ignores hidden pages when settling the current page', async () => {
+    const ref = createRef<PdfDocumentViewerRef>()
+    const onReadingPositionChange = vi.fn()
+    renderViewer({ onReadingPositionChange, hiddenPages: [2] }, ref)
+    await act(async () => {})
+    const container = document.querySelector<HTMLElement>(
+      '.hamster-reader__pdf-viewer-container'
+    )!
+    vi.useFakeTimers()
+    try {
+      container.scrollTop = 320
+      fireEvent.scroll(container)
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(160)
+      })
+      expect(onReadingPositionChange).toHaveBeenLastCalledWith({
+        status: 'pending'
       })
     } finally {
       vi.useRealTimers()

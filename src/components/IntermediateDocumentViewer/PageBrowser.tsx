@@ -94,6 +94,8 @@ type PageBrowserProps = {
   /** 删除矩形框选时触发。 */
   readonly onDeleteRect?: (id: string) => void
   readonly showPagesTab?: boolean
+  /** 初始选中的 tab；缺省时页面模式为 pages，其余为 highlights。 */
+  readonly defaultTab?: PageBrowserTab
   readonly bookmarks?: readonly ReaderBookmark[]
   readonly currentBookmark?: ReaderBookmark
   readonly currentPageNumber?: number
@@ -152,6 +154,17 @@ const tabLabels: Readonly<Record<PageBrowserTab, string>> = {
   outline: '目录',
   highlights: '高亮',
   bookmarks: '书签'
+}
+
+function resolveDefaultTab(
+  requested: PageBrowserTab | undefined,
+  showPagesTab: boolean,
+  showOutlineTab: boolean
+): PageBrowserTab {
+  const fallback: PageBrowserTab = showPagesTab ? 'pages' : 'highlights'
+  if (requested === 'pages' && !showPagesTab) return fallback
+  if (requested === 'outline' && !showOutlineTab) return fallback
+  return requested ?? fallback
 }
 
 function PageBrowserTabs({
@@ -426,6 +439,7 @@ export function PageBrowser({
   onDeleteRange,
   onDeleteRect,
   showPagesTab = true,
+  defaultTab: defaultTabProp,
   bookmarks,
   currentBookmark,
   currentPageNumber: currentPageNumberProp,
@@ -437,8 +451,12 @@ export function PageBrowser({
   onTogglePageBookmark,
   onClose
 }: PageBrowserProps) {
-  const defaultTab = showPagesTab ? 'pages' : 'highlights'
   const showOutlineTab = outline !== undefined
+  const defaultTab = resolveDefaultTab(
+    defaultTabProp,
+    showPagesTab,
+    showOutlineTab
+  )
   const [activeTab, setActiveTab] = useState<PageBrowserTab>(defaultTab)
   const highlightRanges = ranges ?? []
   const highlightRects = rects ?? []
@@ -731,7 +749,7 @@ export function PageBrowser({
         >
           <div className='hamster-reader__page-browser-outline'>
             {typeof outline === 'function'
-              ? outline(activeTab === 'outline')
+              ? outline(activeTab === 'outline' && effectiveOpen)
               : outline}
           </div>
         </div>

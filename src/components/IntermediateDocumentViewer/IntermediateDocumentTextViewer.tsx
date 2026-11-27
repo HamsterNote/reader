@@ -1,6 +1,8 @@
 import type { ReaderHighlightDragHandoff } from '../../types/highlightDrag'
 import { PdfTextSelectionControls } from '../../pdf/PdfTextSelectionControls'
-import { PdfOutline } from '../../pdf/PdfOutline'
+import { createPdfOutlineSessionState, PdfOutline } from '../../pdf/PdfOutline'
+import type { PdfOutlineSessionState } from '../../pdf/PdfOutline'
+import { openPdfOutlineDocument } from '../../pdf/pdfOutlineDocument'
 import type { PDFDocumentProxy } from '../../pdf/pdfjsRuntime'
 import { RangeMagnifierProvider } from './RangeMagnifier'
 import { releasePdfTextPage } from '../../pdf/pdfTextModeDocument'
@@ -904,6 +906,119 @@ import {
   type ReadingAction
 } from '../reading/tapZones'
 
+type PdfOutlineLoader = () => Promise<PDFDocumentProxy | null>
+
+type AcquiredPdfOutlineDocument = {
+  readonly document: PDFDocumentProxy
+  readonly dispose?: () => Promise<void>
+}
+
+async function acquirePdfOutlineDocument(
+  source: ReaderEngineSource,
+  loadDocument: PdfOutlineLoader | undefined,
+  signal: AbortSignal
+): Promise<AcquiredPdfOutlineDocument | null> {
+  if (loadDocument) {
+    const outlineDocument = await loadDocument()
+    return outlineDocument ? { document: outlineDocument } : null
+  }
+  const handle = await openPdfOutlineDocument(source, { signal })
+  return {
+    document: handle.document,
+    dispose: () => handle.dispose()
+  }
+}
+
+type PdfOutlineSession =
+  | { readonly status: 'idle' | 'loading' }
+  | { readonly status: 'ready'; readonly document: PDFDocumentProxy }
+  | { readonly status: 'error' }
+
+function PdfTextOutlinePanel({
+  active,
+  source,
+  loadDocument,
+  currentPageNumber,
+  pageNumbers,
+  sessionState,
+  onNavigate
+}: {
+  readonly active: boolean
+  readonly source: ReaderEngineSource
+  readonly loadDocument?: PdfOutlineLoader
+  readonly currentPageNumber?: number | null
+  readonly pageNumbers: readonly number[]
+  readonly sessionState: PdfOutlineSessionState
+  readonly onNavigate: (pageNumber: number) => void
+}) {
+  const [attempt, setAttempt] = useState(0)
+  const [session, setSession] = useState<PdfOutlineSession>({
+    status: 'idle'
+  })
+
+  useEffect(() => {
+    if (!active) {
+      setSession({ status: 'idle' })
+      return
+    }
+    const controller = new AbortController()
+    let current = true
+    let owned: AcquiredPdfOutlineDocument | null = null
+    setSession({ status: 'loading' })
+    acquirePdfOutlineDocument(source, loadDocument, controller.signal)
+      .then((acquired) => {
+        if (!current) {
+          acquired?.dispose?.().catch(() => undefined)
+          return
+        }
+        if (!acquired) {
+          setSession({ status: 'error' })
+          return
+        }
+        owned = acquired
+        setSession({ status: 'ready', document: acquired.document })
+      })
+      .catch(() => {
+        if (current && !controller.signal.aborted)
+          setSession({ status: 'error' })
+      })
+    return () => {
+      current = false
+      controller.abort()
+      if (owned) {
+        const acquired = owned
+        owned = null
+        acquired.dispose?.().catch(() => undefined)
+      }
+    }
+  }, [active, attempt, loadDocument, source])
+
+  if (!active) return null
+  if (session.status === 'ready') {
+    return (
+      <PdfOutline
+        document={session.document}
+        isActive={active}
+        currentPageNumber={currentPageNumber}
+        pageNumbers={pageNumbers}
+        sessionState={sessionState}
+        onNavigate={onNavigate}
+      />
+    )
+  }
+  if (session.status === 'error') {
+    return (
+      <div role='alert'>
+        <p>目录加载失败，请重试。</p>
+        <button type='button' onClick={() => setAttempt((value) => value + 1)}>
+          重试
+        </button>
+      </div>
+    )
+  }
+  return <p role='status'>正在打开 PDF 目录…</p>
+}
+
 export type IntermediateDocumentTextViewerProps = {
   chromeVisible?: boolean
   onToggleChrome?: () => void
@@ -1218,28 +1333,26 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   const pdfNavigationRef = useRef<ReturnType<
     typeof usePdfTextPagination
   > | null>(null)
-  // Official PDF.js document behind the text-mode index; the outline tab
-  // reuses the same parsing and jump logic as layout mode.
+  // Official PDF.js document behind the text-mode index; the outline panel
+  // opens it on demand and reuses layout-mode jump logic.
   const loadPdfOutlineDocument = isPdf
     ? props.pdfSource?.loadPdfDocument
     : undefined
-  const [pdfOutlineDocument, setPdfOutlineDocument] =
-    useState<PDFDocumentProxy | null>(null)
-  useEffect(() => {
-    if (!loadPdfOutlineDocument) return
-    let current = true
-    setPdfOutlineDocument(null)
-    loadPdfOutlineDocument()
-      .then((outlineDocument) => {
-        if (current) setPdfOutlineDocument(outlineDocument)
-      })
-      .catch(() => {
-        if (current) setPdfOutlineDocument(null)
-      })
-    return () => {
-      current = false
+  const pdfOutlineSource = isPdf ? props.pdfSource : undefined
+  // 折叠集合与校正页缓存挂在当前阅读会话上：目录隐藏时 PdfOutline 会
+  // 卸载并释放自有 PDF 代理，但同一本书再次打开目录时仍恢复这些状态。
+  const pdfOutlineSessionsRef = useRef(
+    new WeakMap<ReaderEngineSource, PdfOutlineSessionState>()
+  )
+  const pdfOutlineSession = useMemo(() => {
+    if (!pdfOutlineSource) return undefined
+    let session = pdfOutlineSessionsRef.current.get(pdfOutlineSource)
+    if (!session) {
+      session = createPdfOutlineSessionState()
+      pdfOutlineSessionsRef.current.set(pdfOutlineSource, session)
     }
-  }, [loadPdfOutlineDocument])
+    return session
+  }, [pdfOutlineSource])
   const flowReadinessRef = useRef<ReturnType<
     typeof createFlowTextReadiness
   > | null>(null)
@@ -1859,21 +1972,25 @@ function TextViewer(props: IntermediateDocumentTextViewerProps) {
   )
   const pdfTextOutline = useMemo(
     () =>
-      pdfOutlineDocument
+      pdfOutlineSource && pdfOutlineSession
         ? (isActive: boolean) => (
-            <PdfOutline
-              document={pdfOutlineDocument}
-              isActive={isActive}
+            <PdfTextOutlinePanel
+              active={isActive}
+              source={pdfOutlineSource}
+              loadDocument={loadPdfOutlineDocument}
               currentPageNumber={readingProgress.currentPageNumber}
               pageNumbers={pageNumbers}
+              sessionState={pdfOutlineSession}
               onNavigate={handleReadingProgressSeekPage}
             />
           )
         : undefined,
     [
       handleReadingProgressSeekPage,
+      loadPdfOutlineDocument,
       pageNumbers,
-      pdfOutlineDocument,
+      pdfOutlineSession,
+      pdfOutlineSource,
       readingProgress.currentPageNumber
     ]
   )

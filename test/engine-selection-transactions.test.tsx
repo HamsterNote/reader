@@ -873,3 +873,61 @@ it.each([
     }
   }
 )
+
+it('hides the page tab for EPUB, defaults to 目录 and resets on book change', async () => {
+  const view = render(
+    <EngineDocumentViewer engineSource={source} showPageBrowser />
+  )
+  await waitFor(() => expect(mocks.factory).toHaveBeenCalledOnce())
+
+  const tabs = await screen.findAllByRole('tab')
+  expect(tabs.map((tab) => tab.textContent)).toEqual(['目录', '高亮', '书签'])
+  expect(screen.queryByRole('tab', { name: '页面' })).toBeNull()
+
+  const outlineTab = screen.getByRole('tab', { name: '目录' })
+  expect(outlineTab).toHaveAttribute('aria-selected', 'true')
+  expect(outlineTab).toHaveAttribute('tabindex', '0')
+  expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
+    'tabindex',
+    '-1'
+  )
+
+  fireEvent.keyDown(outlineTab, { key: 'ArrowRight' })
+  expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+
+  view.rerender(
+    <EngineDocumentViewer
+      engineSource={{ format: 'epub', data: new Uint8Array([2]) }}
+      showPageBrowser
+    />
+  )
+  await waitFor(() =>
+    expect(screen.getByRole('tab', { name: '目录' })).toHaveAttribute(
+      'aria-selected',
+      'true'
+    )
+  )
+})
+
+it('keeps the page tab and its default for PDF layout mode', async () => {
+  render(
+    <EngineDocumentViewer
+      engineSource={{ format: 'pdf', data: new Uint8Array([1]) }}
+      showPageBrowser
+    />
+  )
+  const tabs = await screen.findAllByRole('tab')
+  expect(tabs.map((tab) => tab.textContent)).toEqual([
+    '页面',
+    '目录',
+    '高亮',
+    '书签'
+  ])
+  expect(screen.getByRole('tab', { name: '页面' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+})

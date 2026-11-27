@@ -17,6 +17,13 @@ import {
 } from './mocks/selection'
 import { mockElementSize, resizeObserverMock } from './setup'
 
+const outlineDocumentMock = vi.hoisted(() => ({
+  open: vi.fn()
+}))
+vi.mock('../src/pdf/pdfOutlineDocument', () => ({
+  openPdfOutlineDocument: outlineDocumentMock.open
+}))
+
 function documentFixture(id: string, count = 100) {
   const loaders = Array.from({ length: count }, (_, index) =>
     vi.fn(async () => [
@@ -556,11 +563,16 @@ describe('PDF text mode outline', () => {
       numPages: 6,
       getOutline: async () => [{ title: '第二章', dest: [1], items: [] }]
     })
+    const loadPdfDocument = vi.fn(async () => proxy)
     render(
       <IntermediateDocumentTextViewer
         document={fixture.document}
         isPdf
-        pdfSource={pdfOutlineSource(proxy)}
+        pdfSource={{
+          format: 'pdf',
+          data: new Uint8Array(),
+          loadPdfDocument
+        }}
         showPageBrowser
         textReadingProgress={{ currentPageNumber: 1 }}
       />
@@ -568,6 +580,8 @@ describe('PDF text mode outline', () => {
     sizeRoot()
 
     const outlineTab = await screen.findByRole('tab', { name: '目录' })
+    // 目录会话按需打开：切到目录前不加载 PDF 文档。
+    expect(loadPdfDocument).not.toHaveBeenCalled()
     expect(screen.queryByRole('tab', { name: '页面' })).toBeNull()
     expect(screen.getByRole('tab', { name: '高亮' })).toHaveAttribute(
       'aria-selected',
@@ -576,6 +590,7 @@ describe('PDF text mode outline', () => {
 
     fireEvent.click(outlineTab)
     fireEvent.click(await screen.findByRole('button', { name: '第二章' }))
+    expect(loadPdfDocument).toHaveBeenCalledOnce()
 
     await waitFor(() =>
       expect(screen.getByText('outline page 2')).toBeInTheDocument()
@@ -604,5 +619,142 @@ describe('PDF text mode outline', () => {
     expect(
       await screen.findByText('此 PDF 没有内嵌章节目录，可使用页面导航。')
     ).toBeInTheDocument()
+  })
+
+  it('opens its own PDF document for 目录 when the host passes no loader', async () => {
+    outlineDocumentMock.open.mockReset()
+    const fixture = documentFixture('fallback', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [{ title: '第二章', dest: [1], items: [] }]
+    })
+    const dispose = vi.fn(async () => {})
+    outlineDocumentMock.open.mockResolvedValueOnce({
+      document: proxy,
+      dispose
+    })
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={{ format: 'pdf', data: new Uint8Array() }}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    fireEvent.click(await screen.findByRole('button', { name: '第二章' }))
+
+    await waitFor(() =>
+      expect(screen.getByText('fallback page 2')).toBeInTheDocument()
+    )
+    expect(outlineDocumentMock.open).toHaveBeenCalledOnce()
+    expect(outlineDocumentMock.open).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    )
+    view.unmount()
+    expect(dispose).toHaveBeenCalledOnce()
+  })
+
+  it('keeps the 目录 tab visible and retries after opening the fallback document fails', async () => {
+    outlineDocumentMock.open.mockReset()
+    const fixture = documentFixture('retry-outline', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [{ title: '第二章', dest: [1], items: [] }]
+    })
+    const dispose = vi.fn(async () => {})
+    outlineDocumentMock.open
+      .mockRejectedValueOnce(new Error('cannot open'))
+      .mockResolvedValueOnce({ document: proxy, dispose })
+    render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={{ format: 'pdf', data: new Uint8Array() }}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      '目录加载失败，请重试。'
+    )
+    expect(screen.getByRole('tab', { name: '目录' })).toBeInTheDocument()
+    fireEvent.click(screen.getByRole('button', { name: '重试' }))
+    expect(
+      await screen.findByRole('button', { name: '第二章' })
+    ).toBeInTheDocument()
+    expect(outlineDocumentMock.open).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps collapsed branches when switching away from 目录 and back', async () => {
+    const fixture = documentFixture('outline-session', 6)
+    const proxy = makeOutlineProxy({
+      numPages: 6,
+      getOutline: async () => [
+        {
+          title: '第一章',
+          dest: [0],
+          items: [{ title: '1.1 小节', dest: [1], items: [] }]
+        }
+      ]
+    })
+    render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={pdfOutlineSource(proxy)}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    await screen.findByRole('button', { name: '1.1 小节' })
+    fireEvent.click(screen.getByRole('button', { name: '收起 第一章' }))
+    expect(screen.queryByRole('button', { name: '1.1 小节' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('tab', { name: '高亮' }))
+    fireEvent.click(screen.getByRole('tab', { name: '目录' }))
+    await screen.findByRole('button', { name: '第一章' })
+    expect(screen.queryByRole('button', { name: '1.1 小节' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '展开 第一章' }))
+    expect(screen.getByRole('button', { name: '1.1 小节' })).toBeInTheDocument()
+  })
+
+  it('aborts a pending fallback open when the outline panel unmounts', async () => {
+    outlineDocumentMock.open.mockReset()
+    const fixture = documentFixture('abort-outline', 6)
+    let signal: AbortSignal | undefined
+    outlineDocumentMock.open.mockImplementation(
+      (_source: unknown, options: { signal?: AbortSignal }) => {
+        signal = options.signal
+        return new Promise(() => {})
+      }
+    )
+    const view = render(
+      <IntermediateDocumentTextViewer
+        document={fixture.document}
+        isPdf
+        pdfSource={{ format: 'pdf', data: new Uint8Array() }}
+        showPageBrowser
+        textReadingProgress={{ currentPageNumber: 1 }}
+      />
+    )
+    sizeRoot()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '目录' }))
+    await waitFor(() => expect(signal).toBeDefined())
+    expect(signal!.aborted).toBe(false)
+    view.unmount()
+    expect(signal!.aborted).toBe(true)
   })
 })
