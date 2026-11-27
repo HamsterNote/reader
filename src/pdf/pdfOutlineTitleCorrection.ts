@@ -339,14 +339,14 @@ async function annotatedPageTitleState(
   }
 }
 
-type OutlinePageProbe = {
+export type OutlinePageProbe = {
   readonly failed: boolean
   readonly titles: readonly string[]
   readonly result: TrustedOutlinePageMatch | null
   readonly nearest: TrustedOutlinePageMatch | null
 }
 
-async function probeOutlinePage(
+export async function probeOutlinePage(
   document: PDFDocumentProxy,
   targets: readonly OutlineTitleCorrectionTarget[],
   pageNumber: number,
@@ -385,10 +385,10 @@ async function probeOutlinePage(
     best.target.pageNumber,
     options
   )
-  // 标注页读取失败时不能把这次候选当作依据，也不让它成为后续证据的落点；
-  // 后续读取仍可重试。
+  // 标注页读取失败时不能把这次候选当作依据，也不得让本页标题计入后续
+  // 条目的证据门槛；后续读取仍可重试。
   if (annotatedState === 'unknown') {
-    return { failed: false, titles, result: null, nearest }
+    return { failed: false, titles: [], result: null, nearest }
   }
   const nextNearest = nearest ?? candidate
   const evidence = new Set([...seenTitles, ...titles])

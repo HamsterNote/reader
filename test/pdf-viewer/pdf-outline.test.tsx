@@ -1035,6 +1035,65 @@ describe('PdfOutline', () => {
     expect(onNavigate).not.toHaveBeenCalledWith(6)
   })
 
+  it('does not let a failed read turn another target into a repeated-header correction', async () => {
+    const texts: Record<number, string> = {
+      3: 'B Intro',
+      7: 'B Intro\n这一页只是重复页眉',
+      8: 'A Intro'
+    }
+    const getPage = vi.fn(async (pageNumber: number) => {
+      if (pageNumber === 2) throw new Error('page text rejected')
+      return {
+        getTextContent: async () => ({
+          items: [{ str: texts[pageNumber] ?? '正文内容' }]
+        })
+      }
+    })
+    const document = makeDocument({
+      numPages: 10,
+      getOutline: vi.fn().mockResolvedValue([
+        { title: 'A Intro', dest: [1], items: [] },
+        { title: 'B Intro', dest: [2], items: [] }
+      ]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    const pageNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={8}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    const bIntro = await screen.findByRole('button', { name: 'B Intro' })
+    // 修复后局部扫描不会在 B 的重复页眉处提前结束，而会继续找到 B 的标题页。
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(4))
+    await act(async () => {})
+
+    fireEvent.click(bIntro)
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(3))
+    expect(onNavigate).not.toHaveBeenCalledWith(7)
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={3}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'B Intro' })).toHaveAttribute(
+        'data-active',
+        'true'
+      )
+    )
+  })
+
   it('does not carry corrections across documents in one outline instance', async () => {
     const pageNumbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     const firstTexts: Record<number, string> = {

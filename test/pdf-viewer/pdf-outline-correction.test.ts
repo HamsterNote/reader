@@ -5,7 +5,8 @@ import {
   findTrustedOutlinePage,
   normalizeOutlineTitle,
   OUTLINE_TITLE_SEARCH_LIMIT,
-  pageStartsWithOutlineTitle
+  pageStartsWithOutlineTitle,
+  probeOutlinePage
 } from '../../src/pdf/pdfOutlineTitleCorrection'
 import type { PDFDocumentProxy } from '../../src/pdf/pdfjsRuntime'
 
@@ -313,6 +314,67 @@ describe('findTrustedOutlinePage', () => {
       id: 'intro',
       pageNumber: 7,
       confidence: 'weak'
+    })
+  })
+
+  it('does not report evidence titles when the annotated page cannot be read', async () => {
+    const getPage = vi.fn(async (pageNumber: number) => {
+      if (pageNumber === 2) throw new Error('page text rejected')
+      return {
+        getTextContent: async () => ({
+          items: [{ str: pageNumber === 8 ? 'A Intro' : '正文内容' }]
+        })
+      }
+    })
+    const document = {
+      numPages: 10,
+      getPage
+    } as unknown as PDFDocumentProxy
+    const probe = await probeOutlinePage(
+      document,
+      [{ id: 'a', title: 'A Intro', pageNumber: 2 }],
+      8,
+      8,
+      1,
+      null,
+      new Set(),
+      {}
+    )
+    expect(probe).toMatchObject({ failed: false, titles: [], result: null })
+  })
+
+  it('does not let a failed target supply evidence that moves another target to a repeated header', async () => {
+    const texts: Record<number, string> = {
+      3: 'B Intro',
+      7: 'B Intro\n这一页只是重复页眉',
+      8: 'A Intro'
+    }
+    const getPage = vi.fn(async (pageNumber: number) => {
+      if (pageNumber === 2) throw new Error('page text rejected')
+      return {
+        getTextContent: async () => ({
+          items: [{ str: texts[pageNumber] ?? '正文内容' }]
+        })
+      }
+    })
+    const document = {
+      numPages: 10,
+      getPage
+    } as unknown as PDFDocumentProxy
+    const match = await findTrustedOutlinePage(
+      document,
+      [
+        { id: 'a', title: 'A Intro', pageNumber: 2 },
+        { id: 'b', title: 'B Intro', pageNumber: 3 }
+      ],
+      8
+    )
+    expect(match).toMatchObject({
+      id: 'b',
+      annotatedPage: 3,
+      pageNumber: 3,
+      standalone: true,
+      confidence: 'strong'
     })
   })
 
