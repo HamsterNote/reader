@@ -9,6 +9,7 @@ import {
 import type { PDFDocumentProxy } from './pdfjsRuntime'
 
 const PDF_OUTLINE_TIMEOUT_MS = 10_000
+const CLICK_CORRECTION_TIMEOUT_MS = 2_000
 
 type PdfJsOutlineItem = NonNullable<
   Awaited<ReturnType<PDFDocumentProxy['getOutline']>>
@@ -262,10 +263,14 @@ function isStaleClick(
   navigationCurrent: boolean,
   controller: AbortController,
   owner: PDFDocumentProxy,
-  currentDocument: PDFDocumentProxy | null
+  currentDocument: PDFDocumentProxy | null,
+  active: boolean
 ): boolean {
   return (
-    !navigationCurrent || controller.signal.aborted || currentDocument !== owner
+    !navigationCurrent ||
+    controller.signal.aborted ||
+    currentDocument !== owner ||
+    !active
   )
 }
 
@@ -284,21 +289,76 @@ function readyOutlineState(
   return state?.status === 'ready' && state.document === document ? state : null
 }
 
-async function resolveClickTarget(
+function resolveClickTarget(
   document: PDFDocumentProxy,
   item: PdfOutlineItem,
   annotatedPage: number,
   controller: AbortController
 ): Promise<ClickTargetResolution | undefined> {
-  const matched = await findOutlineTitlePage(
+  return findOutlineTitlePage(
     document,
     { id: item.id, title: item.title, pageNumber: annotatedPage },
     { signal: controller.signal }
+  ).then((matched) => {
+    if (controller.signal.aborted) return undefined
+    const correctedPage =
+      matched !== null && matched !== annotatedPage ? matched : undefined
+    return { pageNumber: matched ?? annotatedPage, correctedPage }
+  })
+}
+
+type ClickSearchResult = {
+  readonly resolution?: ClickTargetResolution
+  readonly timedOut: boolean
+}
+
+async function resolveClickTargetWithinDeadline(
+  document: PDFDocumentProxy,
+  item: PdfOutlineItem,
+  annotatedPage: number,
+  controller: AbortController
+): Promise<ClickSearchResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  let timedOut = false
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => {
+      timedOut = true
+      controller.abort()
+      resolve(undefined)
+    }, CLICK_CORRECTION_TIMEOUT_MS)
+  })
+  try {
+    const resolution = await Promise.race([
+      resolveClickTarget(document, item, annotatedPage, controller),
+      timeout
+    ])
+    return { resolution, timedOut }
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+async function resolveClickNavigation(
+  document: PDFDocumentProxy,
+  item: PdfOutlineItem,
+  annotation: ClickAnnotation,
+  cache: PageCache | undefined,
+  controller: AbortController,
+  panelIsCurrent: () => boolean
+): Promise<ClickTargetResolution | undefined> {
+  // 未校正的目录项先向前找真实标题页；找不到才回退到标注页。
+  const corrected = cache?.correctedById.get(item.id)
+  if (corrected !== undefined) return { pageNumber: corrected }
+  const search = await resolveClickTargetWithinDeadline(
+    document,
+    item,
+    annotation.pageNumber,
+    controller
   )
-  if (controller.signal.aborted) return undefined
-  const correctedPage =
-    matched !== null && matched !== annotatedPage ? matched : undefined
-  return { pageNumber: matched ?? annotatedPage, correctedPage }
+  if (!panelIsCurrent()) return undefined
+  if (!search.resolution && !search.timedOut) return undefined
+  // 超过总期限时中止剩余读页，回退到标注页完成导航。
+  return search.resolution ?? { pageNumber: annotation.pageNumber }
 }
 
 function updateClickCache(
@@ -408,9 +468,20 @@ export function PdfOutline({
     }
     return internal
   }, [document, sessionState])
-  const latest = useRef({ document, pageNumbers, onNavigate })
-  latest.current = { document, pageNumbers, onNavigate }
-  useEffect(() => () => clickScan.current?.abort(), [])
+  const mounted = useRef(true)
+  const latest = useRef({ document, isActive, pageNumbers, onNavigate })
+  latest.current = { document, isActive, pageNumbers, onNavigate }
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      clickScan.current?.abort()
+    }
+  }, [])
+  useEffect(() => {
+    if (!isActive) clickScan.current?.abort()
+  }, [isActive])
+  useEffect(() => () => clickScan.current?.abort(), [document])
   const { begin: beginNavigation, isCurrent: isNavigationCurrent } =
     usePositionTransaction(document)
   const [retry, setRetry] = useState(0)
@@ -592,11 +663,16 @@ export function PdfOutline({
 
   const navigate = async (item: PdfOutlineItem | undefined) => {
     const owner = document
-    if (!owner || !isNavigableItem(item)) return
+    if (!owner || !latest.current.isActive || !isNavigableItem(item)) return
     clickScan.current?.abort()
     const controller = new AbortController()
     clickScan.current = controller
     const transaction = beginNavigation()
+    const panelIsCurrent = () =>
+      mounted.current &&
+      latest.current.isActive &&
+      latest.current.document === owner &&
+      isNavigationCurrent(transaction)
     const readyState = readyOutlineState(state, owner)
     let cache: PageCache | undefined
     if (readyState) {
@@ -609,34 +685,21 @@ export function PdfOutline({
         isNavigationCurrent(transaction),
         controller,
         owner,
-        latest.current.document
+        latest.current.document,
+        latest.current.isActive
       )
     ) {
       return
     }
-    // 未校正的目录项先向前找真实标题页；找不到才回退到标注页。
-    const corrected = cache?.correctedById.get(item.id)
-    let resolution: ClickTargetResolution | undefined =
-      corrected === undefined ? undefined : { pageNumber: corrected }
-    if (!resolution) {
-      resolution = await resolveClickTarget(
-        owner,
-        item,
-        annotation.pageNumber,
-        controller
-      )
-      if (
-        !resolution ||
-        isStaleClick(
-          isNavigationCurrent(transaction),
-          controller,
-          owner,
-          latest.current.document
-        )
-      ) {
-        return
-      }
-    }
+    const resolution = await resolveClickNavigation(
+      owner,
+      item,
+      annotation,
+      cache,
+      controller,
+      panelIsCurrent
+    )
+    if (!resolution || !panelIsCurrent()) return
     const effectivePage = resolution.pageNumber
     if (!latest.current.pageNumbers.includes(effectivePage)) return
     if (readyState && cache) {
@@ -648,12 +711,12 @@ export function PdfOutline({
         annotation.fromDestination
       )
       if (changed) {
-        const complete = snapshotMatches(pageSnapshot, owner, readyState.items)
-          ? Boolean(pageSnapshot?.complete)
-          : false
-        setPageSnapshot(
-          snapshotFromCache(owner, readyState.items, cache, complete)
-        )
+        setPageSnapshot((previous) => {
+          const complete = snapshotMatches(previous, owner, readyState.items)
+            ? Boolean(previous?.complete)
+            : false
+          return snapshotFromCache(owner, readyState.items, cache, complete)
+        })
       }
     }
     latest.current.onNavigate(effectivePage)

@@ -199,6 +199,85 @@ function isSearchableTarget(target: OutlineTitleCorrectionTarget) {
   )
 }
 
+type PendingTitle = {
+  readonly target: OutlineTitleCorrectionTarget
+  candidate?: number
+  inRun: boolean
+}
+
+/**
+ * 页首同名标题既可能是章首，也可能是后续每页重复的页眉。标注页本身命中
+ * 时直接采信；其他页必须看下一页是否仍以同名标题开头，连续命中的整段
+ * 视为页眉，不把其中任何一页当成章首。
+ */
+function applyTitlePage(
+  pageNumber: number,
+  pageText: string,
+  pending: Map<string, PendingTitle>,
+  corrections: Map<string, number>
+): void {
+  for (const [id, state] of pending) {
+    const { target } = state
+    const matched =
+      pageNumber >= target.pageNumber &&
+      pageStartsWithOutlineTitle(pageText, target.title)
+    if (matched && pageNumber === target.pageNumber) {
+      corrections.set(id, pageNumber)
+      pending.delete(id)
+      continue
+    }
+    if (matched) {
+      if (state.candidate === undefined) state.candidate = pageNumber
+      else state.inRun = true
+      continue
+    }
+    if (state.candidate === undefined) continue
+    if (state.inRun) {
+      state.candidate = undefined
+      state.inRun = false
+      continue
+    }
+    corrections.set(id, state.candidate)
+    pending.delete(id)
+  }
+}
+
+/**
+ * 扫描到当前页时，最后一页的候选还没有下一页可验证。补读一页确认它
+ * 不是连续页眉；读取失败时保留该页这一直接命中。
+ */
+async function finalizeTitleCandidates(
+  document: PDFDocumentProxy,
+  lastPage: number,
+  pending: Map<string, PendingTitle>,
+  corrections: Map<string, number>,
+  options: OutlineTitleScanOptions
+): Promise<void> {
+  if (options.signal?.aborted) return
+  const hasCandidate = Array.from(pending.values()).some(
+    (state) => state.candidate !== undefined && !state.inRun
+  )
+  if (!hasCandidate) return
+  let nextText: string | null = null
+  if (lastPage < document.numPages) {
+    try {
+      nextText = await readOutlinePageHeadText(document, lastPage + 1, options)
+    } catch {
+      nextText = null
+    }
+  }
+  for (const [id, state] of pending) {
+    if (state.candidate === undefined || state.inRun) continue
+    if (
+      nextText !== null &&
+      pageStartsWithOutlineTitle(nextText, state.target.title)
+    ) {
+      continue
+    }
+    corrections.set(id, state.candidate)
+  }
+}
+
 /**
  * 点击目录项时向前查找该标题真实所在的页。目录标注页码整体偏移时（例如
  * 标注 16、实际 22），从标注页开始逐页匹配页首标题；找到第一处即返回，
@@ -212,52 +291,28 @@ export async function findOutlineTitlePage(
   if (typeof document.getPage !== 'function' || !isSearchableTarget(target)) {
     return null
   }
-  const { signal } = options
   const lastPage = Math.min(
     document.numPages,
     target.pageNumber + OUTLINE_TITLE_SEARCH_LIMIT
   )
-  for (
-    let pageNumber = target.pageNumber;
-    pageNumber <= lastPage;
-    pageNumber++
-  ) {
-    if (signal?.aborted) return null
-    let text: string
-    try {
-      text = await readOutlinePageHeadText(document, pageNumber, options)
-    } catch {
-      return null
-    }
-    if (pageStartsWithOutlineTitle(text, target.title)) return pageNumber
-  }
-  return null
-}
-
-function matchingTargetIds(
-  pageText: string,
-  unmatched: ReadonlyMap<string, OutlineTitleCorrectionTarget>,
-  pageNumber: number
-): readonly string[] {
-  const ids: string[] = []
-  for (const [id, target] of unmatched) {
-    if (
-      pageNumber >= target.pageNumber &&
-      pageStartsWithOutlineTitle(pageText, target.title)
-    ) {
-      ids.push(id)
-    }
-  }
-  return ids
+  const corrections = await scanOutlineTitlePages(
+    document,
+    [target],
+    lastPage,
+    options
+  )
+  return corrections.get(target.id) ?? null
 }
 
 /**
- * 按页序把已读到的页首标题归到各目录项：每一项只认标注页之后的第一处
- * 命中，因此同一标题在正文或尾注里再次出现时不会覆盖真正的章节起点。
+ * 按页序把已读到的页首标题归到各目录项：每一项只认标注页之后第一处
+ * 单页命中，因此同一标题在正文或尾注里再次出现时不会覆盖真正的章节
+ * 起点，连续重复的同名页眉也不会被误当成章首。
  *
- * 只扫描到调用方当前所在的页，打开目录时不会冷读整本书；结果按文档/页
- * 缓存，滚动过程中新增的页才需要真正读取。任一页读取失败即停止本轮，
- * 不把失败页当成“标题不在此页”的证据，下次调用会重试。
+ * 只扫描到调用方当前所在的页，打开目录时不会冷读整本书；为验证当前页
+ * 的候选会额外读下一页。结果按文档/页缓存，滚动过程中新增的页才需要
+ * 真正读取。任一页读取失败即停止本轮，不把失败页当成“标题不在此页”
+ * 的证据，下次调用会重试。
  */
 export async function scanOutlineTitlePages(
   document: PDFDocumentProxy,
@@ -274,17 +329,15 @@ export async function scanOutlineTitlePages(
     return corrections
   }
   const lastPage = Math.min(document.numPages, throughPage)
-  const pending = targets.filter(
-    (target) => isSearchableTarget(target) && target.pageNumber <= lastPage
-  )
-  if (!pending.length) return corrections
-  const unmatched = new Map(
-    pending.map((target) => [target.id, target] as const)
-  )
+  const pending = new Map<string, PendingTitle>()
   let firstPage = lastPage
-  for (const target of pending) {
-    firstPage = Math.min(firstPage, target.pageNumber)
+  for (const target of targets) {
+    if (isSearchableTarget(target) && target.pageNumber <= lastPage) {
+      pending.set(target.id, { target, inRun: false })
+      firstPage = Math.min(firstPage, target.pageNumber)
+    }
   }
+  if (!pending.size) return corrections
   const { signal } = options
   for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber++) {
     if (signal?.aborted) return corrections
@@ -294,11 +347,15 @@ export async function scanOutlineTitlePages(
     } catch {
       return corrections
     }
-    for (const id of matchingTargetIds(text, unmatched, pageNumber)) {
-      corrections.set(id, pageNumber)
-      unmatched.delete(id)
-    }
-    if (!unmatched.size) break
+    applyTitlePage(pageNumber, text, pending, corrections)
+    if (!pending.size) break
   }
+  await finalizeTitleCandidates(
+    document,
+    lastPage,
+    pending,
+    corrections,
+    options
+  )
   return corrections
 }

@@ -808,6 +808,117 @@ describe('PdfOutline', () => {
     expect(getPage).toHaveBeenCalledTimes(reads)
   })
 
+  it('keeps a valid annotated page when later pages repeat the title as a running header', async () => {
+    const texts: Record<number, string> = {
+      3: '正文内容',
+      7: 'Intro\n这一页只是重复页眉',
+      8: 'Intro\n这一页只是重复页眉',
+      9: 'Intro\n这一页只是重复页眉'
+    }
+    const getPage = vi.fn(async (pageNumber: number) => ({
+      getTextContent: async () => ({
+        items: [{ str: texts[pageNumber] ?? '正文内容' }]
+      })
+    }))
+    const document = makeDocument({
+      numPages: 12,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: 'Intro', dest: [2], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={Array.from({ length: 12 }, (_, index) => index + 1)}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Intro' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(3))
+    expect(onNavigate).not.toHaveBeenCalledWith(7)
+  })
+
+  it('stops an in-flight click and skips navigation after the outline becomes inactive', async () => {
+    const getPage = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return {
+        getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+      }
+    })
+    const document = makeDocument({
+      numPages: 300,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '致谢', dest: [51], items: [] }]),
+      getPage
+    })
+    const pageNumbers = Array.from({ length: 300 }, (_, index) => index + 1)
+    const onNavigate = vi.fn()
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '致谢' }))
+    await waitFor(() => expect(getPage.mock.calls.length).toBeGreaterThan(3))
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive={false}
+        currentPageNumber={1}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    const reads = getPage.mock.calls.length
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+    expect(getPage.mock.calls.length).toBe(reads)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the annotated page when click correction exceeds its deadline', async () => {
+    const getPage = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+      return {
+        getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+      }
+    })
+    const document = makeDocument({
+      numPages: 300,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '致谢', dest: [51], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    const started = performance.now()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={Array.from({ length: 300 }, (_, index) => index + 1)}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '致谢' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(52), {
+      timeout: 3000
+    })
+    expect(performance.now() - started).toBeLessThan(2800)
+  })
+
   it('locates the chapter containing a jumped page and hides later targets', async () => {
     const texts: Record<number, string> = {
       52: '第二章 独行者',

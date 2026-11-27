@@ -119,6 +119,25 @@ describe('findOutlineTitlePage', () => {
     expect(await findOutlineTitlePage(document, target)).toBe(6)
   })
 
+  it('keeps the annotated page when later pages repeat the title as a running header', async () => {
+    const { document } = makeTextDocument(
+      {
+        3: '正文内容',
+        7: '第一章 揭开网络引战的面纱\n页眉',
+        8: '第一章 揭开网络引战的面纱\n页眉',
+        9: '第一章 揭开网络引战的面纱\n页眉'
+      },
+      12
+    )
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章 揭开网络引战的面纱',
+        pageNumber: 3
+      })
+    ).toBeNull()
+  })
+
   it('returns null when the document exposes no page text API', async () => {
     const document = {
       numPages: 4,
@@ -175,6 +194,24 @@ describe('scanOutlineTitlePages', () => {
       7
     )
     expect(corrections.get('intro')).toBe(5)
+  })
+
+  it('does not map an unverified target to a run of repeated page headers', async () => {
+    const { document } = makeTextDocument(
+      {
+        3: '正文内容',
+        7: 'Intro\n页眉',
+        8: 'Intro\n页眉',
+        9: 'Intro\n页眉'
+      },
+      12
+    )
+    const corrections = await scanOutlineTitlePages(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
+      10
+    )
+    expect(corrections.has('intro')).toBe(false)
   })
 
   it('does not let a failed read pollute another target with a repeated header', async () => {
@@ -250,9 +287,11 @@ describe('scanOutlineTitlePages', () => {
       { id: 'ch2', title: '第二章 日常生活中的引战', pageNumber: 6 }
     ]
     await scanOutlineTitlePages(document, targets, 5)
-    expect(getPage).toHaveBeenCalledTimes(4)
+    // 第 5 页命中后补读第 6 页，确认它不是连续页眉。
+    expect(getPage).toHaveBeenCalledTimes(5)
     await scanOutlineTitlePages(document, targets, 8)
-    expect(getPage).toHaveBeenCalledTimes(7)
+    // 新增第 7、8 页的读取，另补读第 9 页验证第 8 页不是连续页眉。
+    expect(getPage).toHaveBeenCalledTimes(8)
   })
 })
 
