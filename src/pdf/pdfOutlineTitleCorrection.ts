@@ -9,9 +9,6 @@ import type { PDFDocumentProxy } from './pdfjsRuntime'
  */
 export const OUTLINE_TITLE_SEARCH_LIMIT = 300
 
-/** 跳页/恢复位置后，从当前页向回查找最近章节标题的窗口大小。 */
-export const OUTLINE_LOCAL_SEARCH_PAGES = 8
-
 /** 只保留页面开头这一长度内的文本，避免缓存整页文字。 */
 const OUTLINE_TITLE_HEAD_CHARS = 160
 
@@ -32,16 +29,6 @@ export type OutlineTitleScanOptions = {
 export type OutlinePageTitleMatch = {
   readonly matched: boolean
   readonly standalone: boolean
-}
-
-export type TrustedOutlinePageMatch = {
-  readonly id: string
-  readonly title: string
-  readonly annotatedPage: number
-  readonly pageNumber: number
-  readonly standalone: boolean
-  /** weak 只表示标注页可读但页首无标题；不能据此校正页码或写入会话校正。 */
-  readonly confidence: 'strong' | 'weak'
 }
 
 type PageHeadCacheEntry = {
@@ -212,16 +199,19 @@ function isSearchableTarget(target: OutlineTitleCorrectionTarget) {
   )
 }
 
-type OutlineTargetSearch = {
-  readonly pageNumber: number | null
-  readonly aborted: boolean
-}
-
-async function searchOutlineTargetPage(
+/**
+ * 点击目录项时向前查找该标题真实所在的页。目录标注页码整体偏移时（例如
+ * 标注 16、实际 22），从标注页开始逐页匹配页首标题；找到第一处即返回，
+ * 未找到返回 null，由调用方退回标注页。命中页永远不会早于标注页。
+ */
+export async function findOutlineTitlePage(
   document: PDFDocumentProxy,
   target: OutlineTitleCorrectionTarget,
-  options: OutlineTitleScanOptions
-): Promise<OutlineTargetSearch> {
+  options: OutlineTitleScanOptions = {}
+): Promise<number | null> {
+  if (typeof document.getPage !== 'function' || !isSearchableTarget(target)) {
+    return null
+  }
   const { signal } = options
   const lastPage = Math.min(
     document.numPages,
@@ -232,252 +222,83 @@ async function searchOutlineTargetPage(
     pageNumber <= lastPage;
     pageNumber++
   ) {
-    if (signal?.aborted) return { pageNumber: null, aborted: true }
+    if (signal?.aborted) return null
     let text: string
     try {
       text = await readOutlinePageHeadText(document, pageNumber, options)
     } catch {
-      return { pageNumber: null, aborted: Boolean(signal?.aborted) }
+      return null
     }
-    if (pageStartsWithOutlineTitle(text, target.title)) {
-      return { pageNumber, aborted: false }
+    if (pageStartsWithOutlineTitle(text, target.title)) return pageNumber
+  }
+  return null
+}
+
+function matchingTargetIds(
+  pageText: string,
+  unmatched: ReadonlyMap<string, OutlineTitleCorrectionTarget>,
+  pageNumber: number
+): readonly string[] {
+  const ids: string[] = []
+  for (const [id, target] of unmatched) {
+    if (
+      pageNumber >= target.pageNumber &&
+      pageStartsWithOutlineTitle(pageText, target.title)
+    ) {
+      ids.push(id)
     }
   }
-  return { pageNumber: null, aborted: false }
+  return ids
 }
 
 /**
- * 显式扫描版式偏移时使用：从标注页开始向后有限范围内查找标题实际所在页，
- * 未命中时保留标注页。阅读器默认不在打开目录时调用它（避免冷开整本），
- * 而是用 {@link findTrustedOutlinePage} 在跳页后做局部窗口匹配。
- * 调用方应传入 AbortSignal，取消后停止读页。页面文字按文档/页缓存，
- * 且只保留页首片段。
+ * 按页序把已读到的页首标题归到各目录项：每一项只认标注页之后的第一处
+ * 命中，因此同一标题在正文或尾注里再次出现时不会覆盖真正的章节起点。
+ *
+ * 只扫描到调用方当前所在的页，打开目录时不会冷读整本书；结果按文档/页
+ * 缓存，滚动过程中新增的页才需要真正读取。任一页读取失败即停止本轮，
+ * 不把失败页当成“标题不在此页”的证据，下次调用会重试。
  */
-export async function correctOutlineTitlePages(
+export async function scanOutlineTitlePages(
   document: PDFDocumentProxy,
   targets: readonly OutlineTitleCorrectionTarget[],
+  throughPage: number,
   options: OutlineTitleScanOptions = {}
 ): Promise<ReadonlyMap<string, number>> {
   const corrections = new Map<string, number>()
-  for (const target of targets) {
-    corrections.set(target.id, target.pageNumber)
-  }
-  if (typeof document.getPage !== 'function' || !targets.length) {
-    return corrections
-  }
-  for (const target of targets) {
-    if (!isSearchableTarget(target)) continue
-    const result = await searchOutlineTargetPage(document, target, options)
-    if (result.aborted) return corrections
-    if (result.pageNumber !== null) {
-      corrections.set(target.id, result.pageNumber)
-    }
-  }
-  return corrections
-}
-
-type PageMatch = {
-  readonly target: OutlineTitleCorrectionTarget
-  readonly standalone: boolean
-}
-
-function matchingTargetsOnPage(
-  pageText: string,
-  targets: readonly OutlineTitleCorrectionTarget[],
-  pageNumber: number
-): readonly PageMatch[] {
-  return targets.flatMap((target) => {
-    if (!isSearchableTarget(target) || pageNumber < target.pageNumber) return []
-    const match = matchOutlinePageTitle(pageText, target.title)
-    return match.matched ? [{ target, standalone: match.standalone }] : []
-  })
-}
-
-function bestPageMatch(matches: readonly PageMatch[]): PageMatch {
-  return matches.reduce((best, current) =>
-    normalizeOutlineTitle(current.target.title).length >
-    normalizeOutlineTitle(best.target.title).length
-      ? current
-      : best
-  )
-}
-
-function toTrustedMatch(
-  match: PageMatch,
-  pageNumber: number,
-  confidence: TrustedOutlinePageMatch['confidence'] = 'strong'
-): TrustedOutlinePageMatch {
-  return {
-    id: match.target.id,
-    title: match.target.title,
-    annotatedPage: match.target.pageNumber,
-    pageNumber,
-    standalone: match.standalone,
-    confidence
-  }
-}
-
-type AnnotatedTitleState = 'matched' | 'no-match' | 'unknown'
-
-async function annotatedPageTitleState(
-  document: PDFDocumentProxy,
-  targets: readonly OutlineTitleCorrectionTarget[],
-  pageNumber: number,
-  options: OutlineTitleScanOptions
-): Promise<AnnotatedTitleState> {
-  try {
-    const text = await readOutlinePageHeadText(document, pageNumber, options)
-    return targets.some(
-      (target) =>
-        isSearchableTarget(target) &&
-        pageStartsWithOutlineTitle(text, target.title)
-    )
-      ? 'matched'
-      : 'no-match'
-  } catch {
-    return 'unknown'
-  }
-}
-
-export type OutlinePageProbe = {
-  readonly failed: boolean
-  readonly titles: readonly string[]
-  readonly result: TrustedOutlinePageMatch | null
-  readonly nearest: TrustedOutlinePageMatch | null
-}
-
-export async function probeOutlinePage(
-  document: PDFDocumentProxy,
-  targets: readonly OutlineTitleCorrectionTarget[],
-  pageNumber: number,
-  currentPageNumber: number,
-  windowStartPage: number,
-  nearest: TrustedOutlinePageMatch | null,
-  seenTitles: ReadonlySet<string>,
-  options: OutlineTitleScanOptions
-): Promise<OutlinePageProbe> {
-  let text: string
-  try {
-    text = await readOutlinePageHeadText(document, pageNumber, options)
-  } catch {
-    return { failed: true, titles: [], result: null, nearest }
-  }
-  const matches = matchingTargetsOnPage(text, targets, pageNumber)
-  if (!matches.length) {
-    return { failed: false, titles: [], result: null, nearest }
-  }
-  const titles = matches.map((match) =>
-    normalizeOutlineTitle(match.target.title)
-  )
-  const best = bestPageMatch(matches)
-  const candidate = toTrustedMatch(best, pageNumber)
-  if (best.target.pageNumber === pageNumber || !best.standalone) {
-    return {
-      failed: false,
-      titles,
-      result: candidate,
-      nearest: nearest ?? candidate
-    }
-  }
-  const annotatedState = await annotatedPageTitleState(
-    document,
-    targets,
-    best.target.pageNumber,
-    options
-  )
-  // 标注页读取失败时不能把这次候选当作依据，也不得让本页标题计入后续
-  // 条目的证据门槛；后续读取仍可重试。
-  if (annotatedState === 'unknown') {
-    return { failed: false, titles: [], result: null, nearest }
-  }
-  const nextNearest = nearest ?? candidate
-  const evidence = new Set([...seenTitles, ...titles])
-  if (evidence.size >= 2) {
-    return {
-      failed: false,
-      titles,
-      result: { ...nextNearest, confidence: 'strong' },
-      nearest: nextNearest
-    }
-  }
-  if (annotatedState !== 'no-match') {
-    return { failed: false, titles, result: null, nearest: nextNearest }
-  }
-  // 标注页在局部窗口之外、而当前页本身就是标题页时，位置本身构成额外
-  // 证据；窗口内仍可能是同名页眉，因此只返回 weak。
-  const currentPageIsTitlePage =
-    pageNumber === currentPageNumber && best.target.pageNumber < windowStartPage
-  return {
-    failed: false,
-    titles,
-    result: toTrustedMatch(
-      best,
-      pageNumber,
-      currentPageIsTitlePage ? 'strong' : 'weak'
-    ),
-    nearest: nextNearest
-  }
-}
-
-/**
- * 跳页/恢复位置后，从当前页向回检查最多 {@link OUTLINE_LOCAL_SEARCH_PAGES}
- * 页，返回离当前页最近的、页首命中目录标题的页。
- *
- * 方向约束：校正页不得早于标注页。独占标题行但页号与标注页不同时，需要
- * 窗口内出现多个不同章节标题才接受；标注页可读但没有标题通常只作为 weak
- * 信号返回，调用方不得据此改判——只有当前页本身就是标题页、且标注页位于
- * 窗口外时，位置才是额外证据。标注页读取失败则返回 null，保留标注页并允许
- * 后续重试。
- */
-export async function findTrustedOutlinePage(
-  document: PDFDocumentProxy,
-  targets: readonly OutlineTitleCorrectionTarget[],
-  currentPageNumber: number,
-  options: OutlineTitleScanOptions & { readonly pageWindow?: number } = {}
-): Promise<TrustedOutlinePageMatch | null> {
   if (
     typeof document.getPage !== 'function' ||
-    !targets.length ||
-    !Number.isInteger(currentPageNumber) ||
-    currentPageNumber < 1 ||
-    currentPageNumber > document.numPages
+    !Number.isInteger(throughPage) ||
+    throughPage < 1
   ) {
-    return null
+    return corrections
+  }
+  const lastPage = Math.min(document.numPages, throughPage)
+  const pending = targets.filter(
+    (target) => isSearchableTarget(target) && target.pageNumber <= lastPage
+  )
+  if (!pending.length) return corrections
+  const unmatched = new Map(
+    pending.map((target) => [target.id, target] as const)
+  )
+  let firstPage = lastPage
+  for (const target of pending) {
+    firstPage = Math.min(firstPage, target.pageNumber)
   }
   const { signal } = options
-  const requestedWindow = Math.floor(
-    options.pageWindow ?? OUTLINE_LOCAL_SEARCH_PAGES
-  )
-  const windowPages = Math.max(
-    1,
-    Math.min(OUTLINE_LOCAL_SEARCH_PAGES, requestedWindow)
-  )
-  const lastPage = Math.max(1, currentPageNumber - windowPages + 1)
-  const seenTitles = new Set<string>()
-  let nearest: TrustedOutlinePageMatch | null = null
-  let weak: TrustedOutlinePageMatch | null = null
-
-  for (
-    let pageNumber = currentPageNumber;
-    pageNumber >= lastPage;
-    pageNumber--
-  ) {
-    if (signal?.aborted) return null
-    const probe = await probeOutlinePage(
-      document,
-      targets,
-      pageNumber,
-      currentPageNumber,
-      lastPage,
-      nearest,
-      seenTitles,
-      options
-    )
-    if (probe.failed) return null
-    for (const title of probe.titles) seenTitles.add(title)
-    nearest = probe.nearest
-    if (probe.result?.confidence === 'strong') return probe.result
-    if (probe.result) weak ??= probe.result
+  for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber++) {
+    if (signal?.aborted) return corrections
+    let text: string
+    try {
+      text = await readOutlinePageHeadText(document, pageNumber, options)
+    } catch {
+      return corrections
+    }
+    for (const id of matchingTargetIds(text, unmatched, pageNumber)) {
+      corrections.set(id, pageNumber)
+      unmatched.delete(id)
+    }
+    if (!unmatched.size) break
   }
-  return weak
+  return corrections
 }
