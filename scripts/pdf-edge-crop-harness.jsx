@@ -30,7 +30,13 @@ function Harness() {
   const [data, setData] = useState({})
   const [editing, setEditing] = useState(false)
   const [browserOpen, setBrowserOpen] = useState(false)
-  const [insets, setInsets] = useState({ top: 0, bottom: 0 })
+  const [insets, setInsets] = useState(() => {
+    const params = new URLSearchParams(location.search)
+    return {
+      top: Number(params.get('topInset') ?? 0) || 0,
+      bottom: Number(params.get('bottomInset') ?? 0) || 0
+    }
+  })
   const selection = useRef(null)
   window.pdfCropTest = {
     data,

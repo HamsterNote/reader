@@ -212,6 +212,64 @@ try {
     name: 'page override and rotated native CropBox',
     overridden
   })
+  {
+    const destinationInset = 48
+    const insetPage = await browser.newPage({
+      viewport: { width: 1200, height: 900 }
+    })
+    insetPage.setDefaultTimeout(30000)
+    insetPage.on('pageerror', (error) => report.errors.push(error.message))
+    try {
+      await insetPage.goto(
+        `http://127.0.0.1:${server.httpServer.address().port}/pdf-edge-crop?topInset=${destinationInset}`
+      )
+      await insetPage
+        .locator('.pdfViewer [data-selection-start-offset]')
+        .first()
+        .waitFor()
+      await insetPage.evaluate(async () => {
+        for (let frame = 0; frame < 12; frame++)
+          await new Promise((done) => requestAnimationFrame(done))
+      })
+      await insetPage.evaluate(() => {
+        window.pdfCropViewer.scrollPageIntoView({
+          pageNumber: 2,
+          destArray: [null, { name: 'XYZ' }, 100, 500, null],
+          allowNegativeOffset: true
+        })
+      })
+      await insetPage.evaluate(
+        () =>
+          new Promise((done) =>
+            requestAnimationFrame(() => requestAnimationFrame(done))
+          )
+      )
+      const insetDestination = await insetPage.evaluate(() => {
+        const viewer = window.pdfCropViewer
+        const view = viewer.getPageView(1)
+        const point = view.viewport.convertToViewportPoint(100, 500)
+        const rect = view.div.getBoundingClientRect()
+        return {
+          page: viewer.currentPageNumber,
+          pointTop: rect.top + point[1],
+          hostTop: viewer.container.getBoundingClientRect().top
+        }
+      })
+      close(
+        insetDestination.pointTop,
+        insetDestination.hostTop + destinationInset,
+        'explicit PDF destination lands below the reader top inset'
+      )
+      assert.equal(insetDestination.page, 2)
+      report.checks.push({
+        name: 'PDF XYZ destination applies the reader top inset',
+        destinationInset,
+        destination: insetDestination
+      })
+    } finally {
+      await insetPage.close()
+    }
+  }
   await page.evaluate(() => window.pdfCropTest.setBrowserOpen(true))
   await page.getByTestId('page-browser-page-2').click()
   await page.evaluate(() => window.pdfCropTest.setBrowserOpen(false))
@@ -227,7 +285,6 @@ try {
     'page jump starts at visible cropped top'
   )
   report.checks.push({ name: 'page browser jump aligns cropped page top' })
-
   // Real Reader editing controls: full page while editing, all four drag handles.
   await page.setViewportSize({ width: 1200, height: 1500 })
   await page

@@ -17,6 +17,21 @@ type PageView = {
 type CropLayout = {
   crop: () => ReaderPageEdgeCrop | undefined
   pages: () => readonly number[]
+  topInset?: () => number
+}
+
+function isTopAlignedExplicitDestination(
+  options: Parameters<PDFViewer['scrollPageIntoView']>[0]
+) {
+  const dest = options.destArray
+  return (
+    Array.isArray(dest) &&
+    (dest[1] as { name?: string } | undefined)?.name === 'XYZ' &&
+    typeof dest[3] === 'number' &&
+    (dest[4] == null || dest[4] === 0) &&
+    options.center !== 'vertical' &&
+    options.center !== 'both'
+  )
 }
 
 /** PDF.js 5.4 visibility contract. Percentages use the displayed crop box;
@@ -160,8 +175,30 @@ export class CroppedPdfViewer extends PDFViewer {
   override scrollPageIntoView(
     options: Parameters<PDFViewer['scrollPageIntoView']>[0]
   ) {
-    super.scrollPageIntoView(options)
-    // Explicit PDF destinations retain their original content coordinates.
-    if (!options.destArray) this.alignCroppedPage(options.pageNumber)
+    // Destination zoom re-enters scrollPageIntoView with the same XYZ target;
+    // only the outermost navigation may consume the top inset.
+    const outermost = this.destinationScrollDepth === 0
+    this.destinationScrollDepth++
+    try {
+      super.scrollPageIntoView(options)
+      if (!outermost) return
+      if (!options.destArray) {
+        // Explicit PDF destinations retain their original content coordinates.
+        this.alignCroppedPage(options.pageNumber)
+        return
+      }
+      const topInset = this.cropLayout?.topInset?.() ?? 0
+      if (topInset > 0 && isTopAlignedExplicitDestination(options)) {
+        const container = this.container
+        if (!container) return
+        const max = Math.max(0, container.scrollHeight - container.clientHeight)
+        const top = Math.max(0, container.scrollTop - topInset)
+        container.scrollTop = max > 0 ? Math.min(max, top) : top
+      }
+    } finally {
+      this.destinationScrollDepth--
+    }
   }
+
+  private destinationScrollDepth = 0
 }

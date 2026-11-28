@@ -49,6 +49,7 @@ type FakePageView = {
 
 type FakeViewerInstance = {
   options: Record<string, unknown>
+  container: HTMLElement
   eventBus: {
     on: (name: string, listener: (payload: unknown) => void) => void
     off: (name: string, listener: (payload: unknown) => void) => void
@@ -116,6 +117,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
 
   class FakePDFViewer implements FakeViewerInstance {
     readonly options: Record<string, unknown>
+    readonly container: HTMLElement
     readonly eventBus: FakeEventBus
     document: unknown = null
     currentScale = 1
@@ -133,6 +135,7 @@ vi.mock('pdfjs-dist/web/pdf_viewer.mjs', () => {
 
     constructor(options: Record<string, unknown>) {
       this.options = options
+      this.container = options.container as HTMLElement
       this.eventBus = options.eventBus as FakeEventBus
       hoisted.viewerInstances.push(this)
     }

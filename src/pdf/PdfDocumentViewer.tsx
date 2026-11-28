@@ -957,7 +957,11 @@ export const PdfDocumentViewer = forwardRef<
       },
       {
         crop: () => cropOptionsRef.current,
-        pages: () => visiblePagesRef.current
+        pages: () => visiblePagesRef.current,
+        topInset: () =>
+          progressOptions.current.readingInsets?.top ??
+          progressOptions.current.viewportTopInset ??
+          0
       }
     )
     linkService.setViewer(viewer)

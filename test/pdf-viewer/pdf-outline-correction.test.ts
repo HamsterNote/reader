@@ -1,12 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from 'vitest'
 import {
-  correctOutlineTitlePages,
-  findTrustedOutlinePage,
+  findOutlineTitlePage,
   normalizeOutlineTitle,
   OUTLINE_TITLE_SEARCH_LIMIT,
   pageStartsWithOutlineTitle,
-  probeOutlinePage
+  scanOutlineTitlePages
 } from '../../src/pdf/pdfOutlineTitleCorrection'
 import type { PDFDocumentProxy } from '../../src/pdf/pdfjsRuntime'
 
@@ -25,84 +24,61 @@ function makeTextDocument(
   }
 }
 
-describe('correctOutlineTitlePages', () => {
-  it('moves a stale outline page to the page whose text starts with the title', async () => {
-    const { document } = makeTextDocument({
-      2: '书名页',
-      22: '第一章　揭开网络引战的面纱',
-      52: '第二章　日常生活中的引战'
-    })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 16 },
-      { id: 'ch2', title: '第二章 日常生活中的引战', pageNumber: 19 }
-    ])
-    expect(corrections.get('ch1')).toBe(22)
-    expect(corrections.get('ch2')).toBe(52)
+const darkWebHeads: Record<number, string> = {
+  12: '引言 自由或死亡\n我听说过关于这个网站的一些谣言。',
+  22: '第一章 揭开网络引战的面纱\n在生命之树的顶端没有爱。',
+  52: '第二章 独行者\n我第一次见到保罗是在英格兰北部。',
+  74: '第三章 潜入“高尔特峡谷”\n赛博朋克将致力于打造匿名系统。',
+  178: '第七章 维特效应\n“耶！欢迎加入小组。”',
+  203: '结语 科技乐观主义与悲观主义之\n争\n技术的转型像把双刃剑。',
+  221: '尾注\n《暗网》一书参考了大量的网络信息来源。',
+  225: '第一章 揭开网络引战的面纱\n“一场生活的灾难……”',
+  290: '致谢\n首先，我要感谢所有人。'
+}
+
+const darkWebTargets = [
+  { id: 'intro', title: '引言 自由或死亡', pageNumber: 12 },
+  { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 16 },
+  { id: 'ch2', title: '第二章 独行者', pageNumber: 19 },
+  { id: 'ch3', title: '第三章 潜入“高尔特峡谷”', pageNumber: 22 },
+  { id: 'ch7', title: '第七章 维特效应', pageNumber: 37 },
+  { id: 'ending', title: '结语 科技乐观主义与悲观主义之争', pageNumber: 41 },
+  { id: 'notes', title: '尾注', pageNumber: 45 },
+  { id: 'thanks', title: '致谢', pageNumber: 52 }
+]
+
+describe('findOutlineTitlePage', () => {
+  it('moves a stale outline page to the first page whose head is the title', async () => {
+    const { document } = makeTextDocument(darkWebHeads, 294)
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章 揭开网络引战的面纱',
+        pageNumber: 16
+      })
+    ).toBe(22)
   })
 
-  it('keeps the annotated page when no page starts with the title', async () => {
-    const { document } = makeTextDocument({ 3: '版权页' })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'cover', title: '延伸阅读', pageNumber: 48 }
-    ])
-    expect(corrections.get('cover')).toBe(48)
+  it('returns the annotated page when it is already correct', async () => {
+    const { document } = makeTextDocument(darkWebHeads, 294)
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'intro',
+        title: '引言 自由或死亡',
+        pageNumber: 12
+      })
+    ).toBe(12)
   })
 
-  it('only matches the start of a page, not a title mentioned mid-page', async () => {
-    const { document } = makeTextDocument({
-      4: '上一章回顾 第一章 揭开网络引战的面纱'
-    })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 4 }
-    ])
-    expect(corrections.get('ch1')).toBe(4)
-  })
-
-  it('requires a complete title at a word or line boundary', async () => {
-    const { document } = makeTextDocument({
-      2: 'Introductory material',
-      3: '第一章 揭开网络引战的面纱 第 5 页'
-    })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'intro', title: 'Intro', pageNumber: 1 },
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
-    ])
-    expect(corrections.get('intro')).toBe(1)
-    expect(corrections.get('ch1')).toBe(2)
-  })
-
-  it('does not match a table-of-contents page that lists the title', async () => {
-    const { document } = makeTextDocument({
-      2: '目录\n第一章 揭开网络引战的面纱\n第二章 日常生活中的引战',
-      3: '第一章 揭开网络引战的面纱'
-    })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
-    ])
-    expect(corrections.get('ch1')).toBe(3)
-  })
-
-  it('rejects a running header followed by body text on the same line', async () => {
-    const { document } = makeTextDocument({
-      2: '第一章 揭开网络引战的面纱 正文从这里开始',
-      3: '第一章 揭开网络引战的面纱'
-    })
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
-    ])
-    expect(corrections.get('ch1')).toBe(3)
-  })
-
-  it('keeps the annotated page when the real page is earlier', async () => {
-    const { document, getPage } = makeTextDocument(
-      { 2: '第一章 揭开网络引战的面纱' },
-      6
-    )
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 5 }
-    ])
-    expect(corrections.get('ch1')).toBe(5)
-    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5, 6])
+  it('never searches backwards for a title before the annotated page', async () => {
+    const { document } = makeTextDocument({ 2: '第一章 揭开网络引战的面纱' }, 6)
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章 揭开网络引战的面纱',
+        pageNumber: 5
+      })
+    ).toBeNull()
   })
 
   it('limits the forward search window', async () => {
@@ -111,218 +87,23 @@ describe('correctOutlineTitlePages', () => {
       { [matchedPage]: '第一章 揭开网络引战的面纱' },
       matchedPage + 10
     )
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
-    ])
-    expect(corrections.get('ch1')).toBe(2)
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章 揭开网络引战的面纱',
+        pageNumber: 2
+      })
+    ).toBeNull()
     expect(getPage.mock.calls.map(([page]) => page)).not.toContain(matchedPage)
   })
 
-  it('stops dispatching new page reads after cancellation', async () => {
-    let resolvePage!: (page: {
-      getTextContent: () => Promise<{ items: { str: string }[] }>
-    }) => void
-    const getPage = vi.fn(
-      () =>
-        new Promise<{
-          getTextContent: () => Promise<{ items: { str: string }[] }>
-        }>((resolve) => {
-          resolvePage = resolve
-        })
-    )
-    const controller = new AbortController()
-    const document = {
-      numPages: 100,
-      getPage
-    } as unknown as PDFDocumentProxy
-    const scan = correctOutlineTitlePages(
-      document,
-      [{ id: 'ch1', title: '第一章', pageNumber: 1 }],
-      { signal: controller.signal }
-    )
-    await Promise.resolve()
-    expect(getPage).toHaveBeenCalledTimes(1)
-    controller.abort()
-    resolvePage({
-      getTextContent: async () => ({ items: [{ str: '正文内容' }] })
-    })
-    await scan
-    await Promise.resolve()
-    expect(getPage).toHaveBeenCalledTimes(1)
-  })
-
-  it('caches page text per document so a second run does not re-extract', async () => {
-    const { document, getPage } = makeTextDocument(
-      { 5: '第一章 揭开网络引战的面纱' },
-      10
-    )
-    const targets = [
-      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 }
-    ]
-    await correctOutlineTitlePages(document, targets)
-    const calls = getPage.mock.calls.length
-    const again = await correctOutlineTitlePages(document, targets)
-    expect(again.get('ch1')).toBe(5)
-    expect(getPage).toHaveBeenCalledTimes(calls)
-  })
-
-  it('stops scanning when page text cannot be read', async () => {
-    const document = {
-      numPages: 50,
-      getPage: vi.fn(async () => {
-        throw new Error('page removed')
-      })
-    } as unknown as PDFDocumentProxy
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章', pageNumber: 2 }
-    ])
-    expect(corrections.get('ch1')).toBe(2)
-    expect(
-      (document.getPage as unknown as ReturnType<typeof vi.fn>).mock.calls
-    ).toHaveLength(1)
-  })
-
-  it('normalizes whitespace, quotes and dashes on both sides', () => {
-    expect(normalizeOutlineTitle('“第一章 — 揭开”')).toBe('第一章揭开')
-    expect(
-      pageStartsWithOutlineTitle(
-        '第一章「揭开网络引战的面纱」',
-        '第一章 —— 揭开网络引战的面纱'
-      )
-    ).toBe(true)
-    expect(pageStartsWithOutlineTitle('序言\n第一章', '第一章')).toBe(false)
-  })
-
-  it('keeps working when the document exposes no page text API', async () => {
-    const document = {
-      numPages: 4,
-      getOutline: vi.fn()
-    } as unknown as PDFDocumentProxy
-    const corrections = await correctOutlineTitlePages(document, [
-      { id: 'ch1', title: '第一章', pageNumber: 2 }
-    ])
-    expect(corrections.get('ch1')).toBe(2)
-  })
-})
-
-describe('findTrustedOutlinePage', () => {
-  it('finds the nearest preceding chapter when a jump lands mid-chapter', async () => {
-    const { document, getPage } = makeTextDocument(
-      {
-        37: '常常指代更谨慎的网络行为。',
-        178: '第七章 维特效应',
-        180: '截至2006年，其相关网站也有500多家。'
-      },
-      300
-    )
-    const match = await findTrustedOutlinePage(
-      document,
-      [{ id: 'ch7', title: '第七章 维特效应', pageNumber: 37 }],
-      180
-    )
-    expect(match).toMatchObject({
-      id: 'ch7',
-      annotatedPage: 37,
-      pageNumber: 178,
-      standalone: true
-    })
-    const pages = getPage.mock.calls.map(([page]) => page)
-    expect(pages.slice(0, 3)).toEqual([180, 179, 178])
-    expect(pages).toContain(37)
-  })
-
-  it('never corrects backwards to a page before the annotated page', async () => {
-    const { document } = makeTextDocument({
-      2: 'Intro',
-      5: 'Intro'
-    })
-    const match = await findTrustedOutlinePage(
-      document,
-      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
-      2
-    )
-    expect(match).toBeNull()
-  })
-
-  it('keeps a correct annotated page when a nearby page repeats the title as its only header', async () => {
-    const { document } = makeTextDocument({
-      5: 'Intro\n正文从这里开始',
-      7: 'Intro\n这一页只是重复页眉'
-    })
-    const match = await findTrustedOutlinePage(
-      document,
-      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
-      7
-    )
-    expect(match).toMatchObject({
-      id: 'intro',
-      annotatedPage: 5,
-      pageNumber: 5
-    })
-  })
-
-  it('accepts a later standalone heading only with multiple consecutive titles as evidence', async () => {
-    const { document } = makeTextDocument({
-      5: 'Another Chapter\n正文',
-      6: 'Another Chapter\n正文',
-      7: 'Intro\n正文'
-    })
-    const match = await findTrustedOutlinePage(
-      document,
-      [
-        { id: 'intro', title: 'Intro', pageNumber: 5 },
-        { id: 'another', title: 'Another Chapter', pageNumber: 5 }
-      ],
-      7
-    )
-    expect(match).toMatchObject({
-      id: 'intro',
-      annotatedPage: 5,
-      pageNumber: 7
-    })
-  })
-
-  it('trusts the current title page when the annotated page is outside the window', async () => {
-    const { document } = makeTextDocument({
-      3: '正文中没有章节标题',
-      12: 'Intro\n正文'
-    })
-    const match = await findTrustedOutlinePage(
-      document,
-      [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
-      12
-    )
-    expect(match).toMatchObject({
-      id: 'intro',
-      annotatedPage: 3,
-      pageNumber: 12,
-      confidence: 'strong'
-    })
-  })
-
-  it('returns weak evidence when only the annotated page title is missing', async () => {
-    const { document } = makeTextDocument({
-      5: '正文中没有章节标题',
-      7: 'Intro\n正文'
-    })
-    const match = await findTrustedOutlinePage(
-      document,
-      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
-      7
-    )
-    expect(match).toMatchObject({
-      id: 'intro',
-      pageNumber: 7,
-      confidence: 'weak'
-    })
-  })
-
-  it('does not report evidence titles when the annotated page cannot be read', async () => {
+  it('returns null when the annotated page cannot be read and retries later', async () => {
+    let fail = true
     const getPage = vi.fn(async (pageNumber: number) => {
-      if (pageNumber === 2) throw new Error('page text rejected')
+      if (pageNumber === 3 && fail) throw new Error('page text rejected')
       return {
         getTextContent: async () => ({
-          items: [{ str: pageNumber === 8 ? 'A Intro' : '正文内容' }]
+          items: [{ str: pageNumber === 6 ? 'Intro' : '正文内容' }]
         })
       }
     })
@@ -330,20 +111,110 @@ describe('findTrustedOutlinePage', () => {
       numPages: 10,
       getPage
     } as unknown as PDFDocumentProxy
-    const probe = await probeOutlinePage(
-      document,
-      [{ id: 'a', title: 'A Intro', pageNumber: 2 }],
-      8,
-      8,
-      1,
-      null,
-      new Set(),
-      {}
-    )
-    expect(probe).toMatchObject({ failed: false, titles: [], result: null })
+    const target = { id: 'intro', title: 'Intro', pageNumber: 3 }
+
+    expect(await findOutlineTitlePage(document, target)).toBeNull()
+
+    fail = false
+    expect(await findOutlineTitlePage(document, target)).toBe(6)
   })
 
-  it('does not let a failed target supply evidence that moves another target to a repeated header', async () => {
+  it('keeps the annotated page when later pages repeat the title as a running header', async () => {
+    const { document } = makeTextDocument(
+      {
+        3: '正文内容',
+        7: '第一章 揭开网络引战的面纱\n页眉',
+        8: '第一章 揭开网络引战的面纱\n页眉',
+        9: '第一章 揭开网络引战的面纱\n页眉'
+      },
+      12
+    )
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章 揭开网络引战的面纱',
+        pageNumber: 3
+      })
+    ).toBeNull()
+  })
+
+  it('returns null when the document exposes no page text API', async () => {
+    const document = {
+      numPages: 4,
+      getOutline: vi.fn()
+    } as unknown as PDFDocumentProxy
+    expect(
+      await findOutlineTitlePage(document, {
+        id: 'ch1',
+        title: '第一章',
+        pageNumber: 2
+      })
+    ).toBeNull()
+  })
+})
+
+describe('scanOutlineTitlePages', () => {
+  it('maps offset chapters up to the current page', async () => {
+    const { document } = makeTextDocument(darkWebHeads, 294)
+    const at25 = await scanOutlineTitlePages(document, darkWebTargets, 25)
+    expect(at25.get('ch1')).toBe(22)
+    expect(at25.has('ch2')).toBe(false)
+
+    const at60 = await scanOutlineTitlePages(document, darkWebTargets, 60)
+    expect(at60.get('ch2')).toBe(52)
+
+    const at80 = await scanOutlineTitlePages(document, darkWebTargets, 80)
+    expect(at80.get('ch3')).toBe(74)
+  })
+
+  it('keeps the first occurrence and ignores a repeated title in the endnotes', async () => {
+    const { document } = makeTextDocument(darkWebHeads, 294)
+    const corrections = await scanOutlineTitlePages(
+      document,
+      darkWebTargets,
+      225
+    )
+    expect(corrections.get('ch1')).toBe(22)
+    expect(corrections.get('notes')).toBe(221)
+    expect(corrections.get('ending')).toBe(203)
+    expect(corrections.get('thanks')).toBeUndefined()
+  })
+
+  it('keeps a correct annotated page when a later page repeats the title', async () => {
+    const { document } = makeTextDocument(
+      {
+        5: 'Intro\n正文从这里开始',
+        7: 'Intro\n这一页只是重复页眉'
+      },
+      10
+    )
+    const corrections = await scanOutlineTitlePages(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 5 }],
+      7
+    )
+    expect(corrections.get('intro')).toBe(5)
+  })
+
+  it('does not map an unverified target to a run of repeated page headers', async () => {
+    const { document } = makeTextDocument(
+      {
+        3: '正文内容',
+        7: 'Intro\n页眉',
+        8: 'Intro\n页眉',
+        9: 'Intro\n页眉'
+      },
+      12
+    )
+    const corrections = await scanOutlineTitlePages(
+      document,
+      [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
+      10
+    )
+    expect(corrections.has('intro')).toBe(false)
+  })
+
+  it('does not let a failed read pollute another target with a repeated header', async () => {
     const texts: Record<number, string> = {
       3: 'B Intro',
       7: 'B Intro\n这一页只是重复页眉',
@@ -361,77 +232,76 @@ describe('findTrustedOutlinePage', () => {
       numPages: 10,
       getPage
     } as unknown as PDFDocumentProxy
-    const match = await findTrustedOutlinePage(
-      document,
-      [
-        { id: 'a', title: 'A Intro', pageNumber: 2 },
-        { id: 'b', title: 'B Intro', pageNumber: 3 }
-      ],
-      8
-    )
-    expect(match).toMatchObject({
-      id: 'b',
-      annotatedPage: 3,
-      pageNumber: 3,
-      standalone: true,
-      confidence: 'strong'
-    })
+    const targets = [
+      { id: 'a', title: 'A Intro', pageNumber: 2 },
+      { id: 'b', title: 'B Intro', pageNumber: 3 }
+    ]
+
+    expect((await scanOutlineTitlePages(document, targets, 8)).size).toBe(0)
+    expect(
+      await findOutlineTitlePage(document, targets[1] as (typeof targets)[1])
+    ).toBe(3)
   })
 
-  it('keeps the annotated page when reading it is rejected', async () => {
-    let failAnnotatedPage = true
-    const getPage = vi.fn(async (pageNumber: number) => {
-      if (pageNumber === 3 && failAnnotatedPage) {
-        throw new Error('page text rejected')
-      }
-      return {
-        getTextContent: async () => ({
-          items: [{ str: pageNumber === 6 ? 'Intro' : '正文内容' }]
+  it('stops dispatching page reads after cancellation', async () => {
+    let resolvePage!: (page: {
+      getTextContent: () => Promise<{ items: { str: string }[] }>
+    }) => void
+    const getPage = vi.fn(
+      () =>
+        new Promise<{
+          getTextContent: () => Promise<{ items: { str: string }[] }>
+        }>((resolve) => {
+          resolvePage = resolve
         })
-      }
-    })
+    )
+    const controller = new AbortController()
     const document = {
-      numPages: 10,
+      numPages: 100,
       getPage
     } as unknown as PDFDocumentProxy
-    const targets = [{ id: 'intro', title: 'Intro', pageNumber: 3 }]
-
-    expect(await findTrustedOutlinePage(document, targets, 6)).toBeNull()
-
-    failAnnotatedPage = false
-    expect(await findTrustedOutlinePage(document, targets, 6)).toMatchObject({
-      id: 'intro',
-      annotatedPage: 3,
-      pageNumber: 6,
-      confidence: 'weak'
+    const scan = scanOutlineTitlePages(
+      document,
+      [{ id: 'ch1', title: '第一章', pageNumber: 1 }],
+      50,
+      { signal: controller.signal }
+    )
+    await Promise.resolve()
+    expect(getPage).toHaveBeenCalledTimes(1)
+    controller.abort()
+    resolvePage({
+      getTextContent: async () => ({ items: [{ str: '正文内容' }] })
     })
+    await scan
+    await Promise.resolve()
+    expect(getPage).toHaveBeenCalledTimes(1)
   })
 
-  it('keeps the annotated page when reading it times out', async () => {
-    vi.useFakeTimers()
-    try {
-      const getPage = vi.fn(async (pageNumber: number) => ({
-        getTextContent:
-          pageNumber === 3
-            ? () => new Promise<never>(() => undefined)
-            : async () => ({
-                items: [{ str: pageNumber === 6 ? 'Intro' : '正文内容' }]
-              })
-      }))
-      const document = {
-        numPages: 10,
-        getPage
-      } as unknown as PDFDocumentProxy
-      const scan = findTrustedOutlinePage(
-        document,
-        [{ id: 'intro', title: 'Intro', pageNumber: 3 }],
-        6
-      )
-      await vi.advanceTimersByTimeAsync(10_000)
-      await vi.runAllTimersAsync()
-      await expect(scan).resolves.toBeNull()
-    } finally {
-      vi.useRealTimers()
-    }
+  it('caches page text and only reads newly reached pages', async () => {
+    const { document, getPage } = makeTextDocument(
+      { 5: '第一章 揭开网络引战的面纱', 8: '第二章 日常生活中的引战' },
+      10
+    )
+    const targets = [
+      { id: 'ch1', title: '第一章 揭开网络引战的面纱', pageNumber: 2 },
+      { id: 'ch2', title: '第二章 日常生活中的引战', pageNumber: 6 }
+    ]
+    await scanOutlineTitlePages(document, targets, 5)
+    // 第 5 页命中后补读第 6 页，确认它不是连续页眉。
+    expect(getPage).toHaveBeenCalledTimes(5)
+    await scanOutlineTitlePages(document, targets, 8)
+    // 新增第 7、8 页的读取，另补读第 9 页验证第 8 页不是连续页眉。
+    expect(getPage).toHaveBeenCalledTimes(8)
   })
+})
+
+it('normalizes whitespace, quotes and dashes on both sides', () => {
+  expect(normalizeOutlineTitle('“第一章 — 揭开”')).toBe('第一章揭开')
+  expect(
+    pageStartsWithOutlineTitle(
+      '第一章「揭开网络引战的面纱」',
+      '第一章 —— 揭开网络引战的面纱'
+    )
+  ).toBe(true)
+  expect(pageStartsWithOutlineTitle('序言\n第一章', '第一章')).toBe(false)
 })

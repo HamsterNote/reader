@@ -659,7 +659,7 @@ describe('PdfOutline', () => {
     expect(onNavigate.mock.calls).toEqual([[4]])
   })
 
-  it('corrects the current page lazily, jumps immediately, then reuses the corrected page', async () => {
+  it('corrects pages up to the current position, then jumps to the real chapter page', async () => {
     const texts: Record<number, string> = {
       1: '版权信息',
       2: '版权信息',
@@ -697,15 +697,15 @@ describe('PdfOutline', () => {
         screen.getByRole('button', { name: '第一章 揭开网络引战的面纱' })
       ).toHaveAttribute('aria-current', 'location')
     )
-    // 当前页命中标题后，继续向回读到第二个连续标题才构成强证据。
-    expect(getPage.mock.calls.map(([page]) => page).slice(0, 4)).toEqual([
-      5, 2, 4, 1
-    ])
+    // 从最早标注页一路读到当前页，序言和第一章的真实页都被校正。
+    expect(getPage.mock.calls.map(([page]) => page)).toEqual(
+      expect.arrayContaining([1, 2, 3, 4, 5])
+    )
     fireEvent.click(
       screen.getByRole('button', { name: '第二章 日常生活中的引战' })
     )
-    // 校正结果尚未覆盖第二章时按标注页立即跳转。
-    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(3))
+    // 第二章尚未校正，点击时向前找到真实标题页。
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(6))
 
     view.rerender(
       <PdfOutline
@@ -731,16 +731,23 @@ describe('PdfOutline', () => {
     )
   })
 
-  it('navigates without waiting for page text correction', async () => {
+  it('cancels an earlier click lookup when another chapter is clicked', async () => {
     const pendingText = deferred<{ items: { str: string }[] }>()
-    const getPage = vi.fn(() => ({
-      getTextContent: () => pendingText.promise
-    }))
+    const getPage = vi.fn((pageNumber: number) =>
+      pageNumber === 37
+        ? { getTextContent: () => pendingText.promise }
+        : {
+            getTextContent: async () => ({
+              items: [{ str: pageNumber === 19 ? '第二章' : '正文内容' }]
+            })
+          }
+    )
     const document = makeDocument({
-      numPages: 6,
-      getOutline: vi
-        .fn()
-        .mockResolvedValue([{ title: '第七章', dest: [1], items: [] }]),
+      numPages: 300,
+      getOutline: vi.fn().mockResolvedValue([
+        { title: '第七章', dest: [36], items: [] },
+        { title: '第二章', dest: [18], items: [] }
+      ]),
       getPage
     })
     const onNavigate = vi.fn()
@@ -748,15 +755,21 @@ describe('PdfOutline', () => {
       <PdfOutline
         document={document}
         isActive
-        currentPageNumber={1}
-        pageNumbers={[1, 2, 3, 4, 5, 6]}
+        pageNumbers={Array.from({ length: 300 }, (_, index) => index + 1)}
         onNavigate={onNavigate}
       />
     )
-    await screen.findByRole('button', { name: '第七章' })
-    fireEvent.click(screen.getByRole('button', { name: '第七章' }))
-    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(2))
-    expect(pendingText.resolve).toBeTypeOf('function')
+    fireEvent.click(await screen.findByRole('button', { name: '第七章' }))
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(37))
+    fireEvent.click(screen.getByRole('button', { name: '第二章' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenLastCalledWith(19))
+
+    await act(async () => {
+      pendingText.resolve({ items: [{ str: '第七章 维特效应' }] })
+      await pendingText.promise
+    })
+    expect(onNavigate).not.toHaveBeenCalledWith(38)
+    expect(onNavigate.mock.calls).toEqual([[19]])
   })
 
   it('stops requesting page text when the outline is no longer visible', async () => {
@@ -795,12 +808,123 @@ describe('PdfOutline', () => {
     expect(getPage).toHaveBeenCalledTimes(reads)
   })
 
-  it('locates the nearest preceding chapter after a jump and hides unverified targets', async () => {
+  it('keeps a valid annotated page when later pages repeat the title as a running header', async () => {
     const texts: Record<number, string> = {
-      37: '常常指代更谨慎的网络行为。',
-      52: '致谢',
+      3: '正文内容',
+      7: 'Intro\n这一页只是重复页眉',
+      8: 'Intro\n这一页只是重复页眉',
+      9: 'Intro\n这一页只是重复页眉'
+    }
+    const getPage = vi.fn(async (pageNumber: number) => ({
+      getTextContent: async () => ({
+        items: [{ str: texts[pageNumber] ?? '正文内容' }]
+      })
+    }))
+    const document = makeDocument({
+      numPages: 12,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: 'Intro', dest: [2], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={Array.from({ length: 12 }, (_, index) => index + 1)}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Intro' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(3))
+    expect(onNavigate).not.toHaveBeenCalledWith(7)
+  })
+
+  it('stops an in-flight click and skips navigation after the outline becomes inactive', async () => {
+    const getPage = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      return {
+        getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+      }
+    })
+    const document = makeDocument({
+      numPages: 300,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '致谢', dest: [51], items: [] }]),
+      getPage
+    })
+    const pageNumbers = Array.from({ length: 300 }, (_, index) => index + 1)
+    const onNavigate = vi.fn()
+    const view = render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '致谢' }))
+    await waitFor(() => expect(getPage.mock.calls.length).toBeGreaterThan(3))
+
+    view.rerender(
+      <PdfOutline
+        document={document}
+        isActive={false}
+        currentPageNumber={1}
+        pageNumbers={pageNumbers}
+        onNavigate={onNavigate}
+      />
+    )
+    const reads = getPage.mock.calls.length
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 100))
+    })
+    expect(getPage.mock.calls.length).toBe(reads)
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('falls back to the annotated page when click correction exceeds its deadline', async () => {
+    const getPage = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 15))
+      return {
+        getTextContent: async () => ({ items: [{ str: '正文内容' }] })
+      }
+    })
+    const document = makeDocument({
+      numPages: 300,
+      getOutline: vi
+        .fn()
+        .mockResolvedValue([{ title: '致谢', dest: [51], items: [] }]),
+      getPage
+    })
+    const onNavigate = vi.fn()
+    const started = performance.now()
+    render(
+      <PdfOutline
+        document={document}
+        isActive
+        currentPageNumber={1}
+        pageNumbers={Array.from({ length: 300 }, (_, index) => index + 1)}
+        onNavigate={onNavigate}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: '致谢' }))
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(52), {
+      timeout: 3000
+    })
+    expect(performance.now() - started).toBeLessThan(2800)
+  })
+
+  it('locates the chapter containing a jumped page and hides later targets', async () => {
+    const texts: Record<number, string> = {
+      52: '第二章 独行者',
       178: '第七章 维特效应',
-      180: '截至2006年，其相关网站也有500多家。'
+      180: '截至2006年，其相关网站也有500多家。',
+      290: '致谢'
     }
     const getPage = vi.fn(async (pageNumber: number) => ({
       getTextContent: async () => ({
@@ -810,6 +934,7 @@ describe('PdfOutline', () => {
     const document = makeDocument({
       numPages: 300,
       getOutline: vi.fn().mockResolvedValue([
+        { title: '第二章 独行者', dest: [18], items: [] },
         { title: '第七章 维特效应', dest: [36], items: [] },
         { title: '致谢', dest: [51], items: [] }
       ]),
@@ -835,18 +960,14 @@ describe('PdfOutline', () => {
       />
     )
 
-    // 标注页可读但页首无标题只是弱证据：不校正，也不高亮未验证候选。
-    await waitFor(() => expect(getPage).toHaveBeenCalledWith(37))
-    await act(async () => {})
-    expect(
-      screen.getByRole('button', { name: '第七章 维特效应' })
-    ).not.toHaveAttribute('data-active')
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '第七章 维特效应' })
+      ).toHaveAttribute('data-active', 'true')
+    )
     expect(screen.getByRole('button', { name: '致谢' })).not.toHaveAttribute(
       'data-active'
     )
-    expect(getPage.mock.calls.map(([page]) => page).slice(0, 3)).toEqual([
-      180, 179, 178
-    ])
 
     view.rerender(
       <PdfOutline
@@ -857,9 +978,11 @@ describe('PdfOutline', () => {
         onNavigate={vi.fn()}
       />
     )
-    await waitFor(() => expect(getPage).toHaveBeenCalledWith(60))
-    await act(async () => {})
-    expect(globalThis.document.querySelector('[data-active="true"]')).toBeNull()
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: '第二章 独行者' })
+      ).toHaveAttribute('data-active', 'true')
+    )
   })
 
   it('does not cancel or reuse a delayed page read when a destination snapshot updates', async () => {
@@ -897,21 +1020,19 @@ describe('PdfOutline', () => {
     await act(async () => {
       pendingDestination.resolve([{ num: 2, gen: 0 }])
       await pendingDestination.promise
-    })
-    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(2))
-    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5])
-
-    await act(async () => {
       pendingText.resolve({ items: [{ str: 'Chapter' }] })
       await pendingText.promise
     })
+    await waitFor(() => expect(onNavigate).toHaveBeenCalledWith(2))
+    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5, 2, 3, 4, 6])
+    expect(getPage.mock.calls.filter(([page]) => page === 5)).toHaveLength(1)
+
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Chapter' })).toHaveAttribute(
         'data-active',
         'true'
       )
     )
-    expect(getPage.mock.calls.map(([page]) => page)).toEqual([5])
   })
 
   it('retries the same page read after it was cancelled', async () => {
@@ -1069,8 +1190,8 @@ describe('PdfOutline', () => {
       />
     )
     const bIntro = await screen.findByRole('button', { name: 'B Intro' })
-    // 修复后局部扫描不会在 B 的重复页眉处提前结束，而会继续找到 B 的标题页。
-    await waitFor(() => expect(getPage).toHaveBeenCalledWith(4))
+    // 失败的标注页会中止本轮扫描，且页面标题不会成为 B 的重复页眉证据。
+    await waitFor(() => expect(getPage).toHaveBeenCalledWith(2))
     await act(async () => {})
 
     fireEvent.click(bIntro)
@@ -1161,7 +1282,6 @@ describe('PdfOutline', () => {
       />
     )
     const secondIntro = await screen.findByRole('button', { name: 'B Intro' })
-    await waitFor(() => expect(secondDocument.getPage).toHaveBeenCalledWith(8))
     await act(async () => {})
     expect(secondIntro).not.toHaveAttribute('data-active')
     fireEvent.click(secondIntro)
