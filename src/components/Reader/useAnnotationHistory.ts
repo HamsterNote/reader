@@ -111,7 +111,8 @@ const copy = <T>(value: T): T =>
  * retained history snapshot, external = the host's latest value). Fields the
  * local stack changed keep the history value; fields it did not touch take the
  * host's value, so independent external edits survive undo/redo. Same-leaf
- * conflicts resolve to history.
+ * conflicts resolve to history. Optional style objects descend the same way
+ * when one side has not created them yet (e.g. first local `markerStyle`).
  */
 function mergeFields(
   base: unknown,
@@ -121,15 +122,27 @@ function mergeFields(
   if (sameValue(local, external)) return local
   if (sameValue(local, base)) return copy(external)
   if (sameValue(external, base)) return local
-  if (isRecord(base) && isRecord(local) && isRecord(external)) {
+  const canDescend =
+    (isRecord(local) || local === undefined) &&
+    (isRecord(external) || external === undefined) &&
+    (isRecord(base) || base === undefined) &&
+    (isRecord(local) || isRecord(external))
+  if (canDescend) {
+    const baseRecord = isRecord(base) ? base : {}
+    const localRecord = isRecord(local) ? local : {}
+    const externalRecord = isRecord(external) ? external : {}
     const merged: Record<string, unknown> = {}
     const keys = new Set([
-      ...Object.keys(base),
-      ...Object.keys(local),
-      ...Object.keys(external)
+      ...Object.keys(baseRecord),
+      ...Object.keys(localRecord),
+      ...Object.keys(externalRecord)
     ])
     keys.forEach((key) => {
-      const value = mergeFields(base[key], local[key], external[key])
+      const value = mergeFields(
+        baseRecord[key],
+        localRecord[key],
+        externalRecord[key]
+      )
       if (value !== undefined) merged[key] = value
     })
     return merged
@@ -168,12 +181,86 @@ function mergeIdentified<T extends { readonly id: string }>(
   })
   return ordered
 }
-const pagePaintingKey = (pageId: string, doc: unknown) =>
-  paintingContentKey(
+const objectIdOf = (value: unknown): string | undefined =>
+  isRecord(value) && typeof value.objectId === 'string'
+    ? value.objectId
+    : undefined
+/**
+ * Object-level replay of the host's page edit onto a retained snapshot. Objects
+ * the local stack added or removed keep that decision; other objects take the
+ * host's additions and field changes, so strokes drawn on another device on the
+ * same page survive undo/redo.
+ */
+function mergeObjects(
+  target: readonly unknown[],
+  previous: readonly unknown[],
+  next: readonly unknown[]
+): unknown[] {
+  const byId = (items: readonly unknown[]) => {
+    const map = new Map<string, unknown>()
+    items.forEach((item) => {
+      const id = objectIdOf(item)
+      if (id !== undefined) map.set(id, item)
+    })
+    return map
+  }
+  const targetById = byId(target)
+  const previousById = byId(previous)
+  const merged: unknown[] = []
+  const seen = new Set<string>()
+  next.forEach((item) => {
+    const id = objectIdOf(item)
+    if (id === undefined || seen.has(id)) return
+    seen.add(id)
+    const targetItem = targetById.get(id)
+    if (targetItem === undefined) {
+      // The snapshot removed it locally; only an object the host added survives.
+      if (!previousById.has(id)) merged.push(copy(item))
+      return
+    }
+    const previousItem = previousById.get(id)
+    merged.push(
+      previousItem === undefined
+        ? copy(item)
+        : mergeFields(previousItem, targetItem, item)
+    )
+  })
+  target.forEach((item) => {
+    const id = objectIdOf(item)
+    if (id === undefined || seen.has(id)) return
+    seen.add(id)
+    // Locally added objects stay; objects also present before but gone in the
+    // host's value were deleted externally.
+    if (!previousById.has(id)) merged.push(item)
+  })
+  return merged
+}
+const pagePaintingJson = (pageId: string, doc: unknown): string =>
+  paintingJson(
     isRecord(doc) && 'objects' in doc
       ? ({ [pageId]: doc } as ReaderPagePaintingMap)
       : {}
   )
+const samePagePainting = (pageId: string, a: unknown, b: unknown) =>
+  pagePaintingJson(pageId, a) === pagePaintingJson(pageId, b)
+function mergePagePainting(
+  targetDoc: unknown,
+  previousDoc: unknown,
+  nextDoc: unknown
+): unknown {
+  const doc = copy(nextDoc)
+  if (!isRecord(doc) || !isRecord(targetDoc)) return doc
+  const objects = (value: unknown) =>
+    isRecord(value) && Array.isArray(value.objects) ? value.objects : []
+  return {
+    ...doc,
+    objects: mergeObjects(
+      objects(targetDoc),
+      objects(previousDoc),
+      objects(doc)
+    )
+  }
+}
 function mergePagePaintings(
   target: ReaderPagePaintingMap,
   previous: ReaderPagePaintingMap,
@@ -195,23 +282,21 @@ function mergePagePaintings(
       merged[pageId] = copy(nextDoc)
       return
     }
-    if (
-      pagePaintingKey(pageId, previousDoc) === pagePaintingKey(pageId, nextDoc)
-    ) {
+    if (samePagePainting(pageId, previousDoc, nextDoc)) {
       // The host did not change this page: keep the snapshot's own value,
       // including a missing page (e.g. undoing the first stroke).
       if (targetDoc) merged[pageId] = targetDoc
       return
     }
-    if (
-      targetDoc &&
-      pagePaintingKey(pageId, targetDoc) !==
-        pagePaintingKey(pageId, previousDoc)
-    ) {
-      merged[pageId] = targetDoc
+    if (!targetDoc) {
+      merged[pageId] = copy(nextDoc)
       return
     }
-    merged[pageId] = copy(nextDoc)
+    merged[pageId] = mergePagePainting(
+      targetDoc,
+      previousDoc,
+      nextDoc
+    ) as ReaderPagePaintingMap[string]
   })
   return merged
 }

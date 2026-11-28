@@ -57,6 +57,15 @@ const reorderRange = (range: ReaderSelectionRange): ReaderSelectionRange => ({
   text: range.text,
   id: range.id
 })
+const reverseKeys = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value.map(reverseKeys)
+  if (typeof value !== 'object' || value === null) return value
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>)
+      .reverse()
+      .map(([key, child]) => [key, reverseKeys(child)])
+  )
+}
 
 function renderHistory(
   enabled = true,
@@ -279,6 +288,42 @@ describe('useAnnotationHistory', () => {
     })
   })
 
+  it('merges external style fields when the snapshot lacks the optional style object', () => {
+    const { result } = renderHistory(
+      true,
+      undefined,
+      makeValue([makeRange('r1', 'one')], 'r1')
+    )
+    act(() => {
+      result.current.setCheckpoint(
+        makeValue(
+          [
+            {
+              ...makeRange('r1', 'one'),
+              markerStyle: { backgroundColor: '#0000ff' }
+            }
+          ],
+          'r1'
+        ),
+        'update-range'
+      )
+    })
+    act(() => {
+      result.current.syncSilent(
+        makeValue(
+          [{ ...makeRange('r1', 'one'), markerStyle: { color: '#ff0000' } }],
+          'r1'
+        )
+      )
+    })
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().ranges[0]?.markerStyle).toEqual({
+      color: '#ff0000'
+    })
+  })
+
   it('keeps a missing page painting when external edits only touch annotations', () => {
     const { result } = renderHistory()
     const stroke = drawingFixture({
@@ -340,6 +385,78 @@ describe('useAnnotationHistory', () => {
     expect(result.current.getPresent().pagePaintings?.['page-1']).toEqual(
       extended
     )
+  })
+
+  it('merges same-page strokes by objectId when undoing a local stroke', () => {
+    const strokeA = { id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }
+    const strokeL = { id: 'l', tool: 'pen', points: [{ x: 3, y: 4 }] }
+    const strokeR = { id: 'r', tool: 'pen', points: [{ x: 5, y: 6 }] }
+    const { result } = renderHistory(true, undefined, {
+      ...makeValue([]),
+      pagePaintings: { 'page-1': drawingFixture({ strokes: [strokeA] }) }
+    })
+    act(() => {
+      result.current.setCheckpoint(
+        {
+          ...makeValue([]),
+          pagePaintings: {
+            'page-1': drawingFixture({ strokes: [strokeA, strokeL] })
+          }
+        },
+        'drawing'
+      )
+    })
+    act(() => {
+      result.current.syncSilent({
+        ...makeValue([]),
+        pagePaintings: {
+          'page-1': drawingFixture({ strokes: [strokeA, strokeL, strokeR] })
+        }
+      })
+    })
+    const objectIds = () =>
+      result.current
+        .getPresent()
+        .pagePaintings?.['page-1']?.objects.map((object) => object.objectId)
+
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(objectIds()).toEqual(['a', 'r'])
+    act(() => {
+      expect(result.current.redo()).toMatchObject({ applied: true })
+    })
+    expect(objectIds()).toEqual(['a', 'l', 'r'])
+  })
+
+  it('keeps a missing page when an external highlight echo reorders painting keys', () => {
+    const stroke = drawingFixture({
+      strokes: [{ id: 'a', tool: 'pen', points: [{ x: 1, y: 2 }] }]
+    })
+    const reordered = reverseKeys({
+      ...stroke,
+      documentRevision: stroke.documentRevision + 1
+    }) as typeof stroke
+    const { result } = renderHistory()
+    act(() => {
+      result.current.setCheckpoint(
+        { ...initialValue, pagePaintings: { 'page-1': stroke } },
+        'drawing'
+      )
+    })
+    act(() => {
+      result.current.syncSilent({
+        ...makeValue([makeRange('r1', 'external')]),
+        pagePaintings: { 'page-1': reordered }
+      })
+    })
+    act(() => {
+      expect(result.current.undo()).toMatchObject({ applied: true })
+    })
+    expect(result.current.getPresent().ranges.map((range) => range.id)).toEqual(
+      ['r1']
+    )
+    expect(result.current.getPresent().pagePaintings).toEqual({})
   })
 
   it('treats reordered echoes as no-ops for retained snapshots', () => {
