@@ -63,7 +63,8 @@
     "check:native-epub-anchor": "node scripts/check-native-epub-anchor.mjs",
     "check:native-epub-highlights": "node scripts/check-native-epub-highlights.mjs",
     "check:pdf-inset": "node scripts/check-pdf-page-inset.mjs",
-    "check:highlight-handoff": "node scripts/check-highlight-handoff.mjs"
+    "check:highlight-handoff": "node scripts/check-highlight-handoff.mjs",
+    "check:pdf-history": "node scripts/check-pdf-history.mjs"
   },
   "jest": {
     "preset": "jest-expo",

@@ -4692,7 +4692,7 @@ describe('Reader annotation history', () => {
     expect(changed).toHaveBeenCalledTimes(saves + 1)
   })
 
-  it('resets on a true external replacement, keeps equal controlled echoes, and isolates files', async () => {
+  it('syncs same-document external content without clearing history, and isolates files', async () => {
     const ref = createRef<ReaderSelectionRef>()
     const first = makeLazyDocument(1).document
     const second = makeLazyDocument(1).document
@@ -4753,9 +4753,12 @@ describe('Reader annotation history', () => {
         onAnnotationHistoryChange={onHistory}
       />
     )
+    // 同一文档内的外部内容变更只同步当前值，不再清空 undo/redo 栈。
     expect(
       requireReaderSelectionRef(ref).getAnnotationHistoryState()
-    ).toMatchObject({ pastCount: 0, futureCount: 0 })
+    ).toMatchObject({ pastCount: 0, futureCount: 1 })
+    expect(requireReaderSelectionRef(ref).canRedo()).toBe(true)
+    // 真正换文件（文档身份变化）才清空历史。
     view.rerender(
       <Reader
         document={second}
@@ -4765,6 +4768,9 @@ describe('Reader annotation history', () => {
       />
     )
     expect(capturedViewerProps.pagePaintings).toEqual({})
+    expect(
+      requireReaderSelectionRef(ref).getAnnotationHistoryState()
+    ).toMatchObject({ pastCount: 0, futureCount: 0 })
     expect(requireReaderSelectionRef(ref).canUndo()).toBe(false)
   })
 
@@ -5025,6 +5031,16 @@ describe('Reader annotation history', () => {
     })
     expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(true)
 
+    act(() => {
+      expect(requireReaderSelectionRef(selectionRef).undo()).toBe(true)
+    })
+    expect(
+      requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+    ).toMatchObject({
+      pastCount: 0,
+      futureCount: 1
+    })
+
     rerender(
       <Reader
         document={document}
@@ -5035,6 +5051,9 @@ describe('Reader annotation history', () => {
     )
 
     await waitFor(() => {
+      expect(
+        requireReaderSelectionRef(selectionRef).getAnnotationHistoryState()
+      ).toMatchObject({ pastCount: 0, futureCount: 0 })
       expect(requireReaderSelectionRef(selectionRef).canUndo()).toBe(false)
       expect(requireReaderSelectionRef(selectionRef).canRedo()).toBe(false)
     })
