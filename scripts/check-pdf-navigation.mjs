@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdir, writeFile } from 'node:fs/promises'
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 import { createServer } from 'vite'
@@ -8,6 +8,10 @@ import { chromium } from 'playwright'
 const repo = resolve(import.meta.dirname, '..')
 const output = resolve(repo, '../ham160-browser')
 await mkdir(output, { recursive: true })
+const outlineSource = process.env.PDF_NAVIGATION_OUTLINE_PDF
+const outlineBytes = outlineSource
+  ? await readFile(resolve(outlineSource))
+  : undefined
 const doc = await PDFDocument.create()
 const font = await doc.embedFont(StandardFonts.Helvetica)
 for (let p = 1; p <= 5; p++) {
@@ -48,6 +52,11 @@ const server = await createServer({
             response.end(Buffer.from(await doc.save()))
           }
         )
+        if (outlineBytes)
+          server.middlewares.use('/outline.pdf', (_request, response) => {
+            response.setHeader('Content-Type', 'application/pdf')
+            response.end(outlineBytes)
+          })
         server.middlewares.use(
           '/pdf-navigation',
           async (_request, response) => {
@@ -76,6 +85,95 @@ try {
   })
   page.setDefaultTimeout(30000)
   page.on('pageerror', (error) => report.errors.push(error.message))
+  if (outlineBytes) {
+    await page.setViewportSize({ width: 1440, height: 1000 })
+    await page.goto(
+      `http://127.0.0.1:${server.httpServer.address().port}/pdf-navigation?fixture=/outline.pdf`
+    )
+    await page.locator('.pdfViewer .page').first().waitFor({ timeout: 120000 })
+    const host = page.locator('.hamster-reader__pdf-viewer-container')
+    const tocPage = page.locator('.pdfViewer .page').nth(7)
+    const chapterLink = tocPage.locator('.annotationLayer a').nth(1)
+    const gotoPage = (index) =>
+      host.evaluate((element, index) => {
+        const sheet = element.querySelectorAll('.page')[index]
+        element.dispatchEvent(new WheelEvent('wheel', { bubbles: true }))
+        element.scrollTop +=
+          sheet.getBoundingClientRect().top -
+          element.getBoundingClientRect().top
+      }, index)
+    const measureChapterTop = () =>
+      page.evaluate(() => {
+        const viewer = document.querySelector(
+          '.hamster-reader__pdf-viewer-container'
+        )
+        const sheet = viewer.querySelectorAll('.page')[21]
+        const span = [...sheet.querySelectorAll('.textLayer span')].find(
+          (item) => item.textContent.includes('第一章')
+        )
+        const range = document.createRange()
+        range.selectNodeContents(span)
+        return {
+          hostTop: viewer.getBoundingClientRect().top,
+          titleTop: range.getBoundingClientRect().top,
+          scrollTop: viewer.scrollTop
+        }
+      })
+    const clickChapter = async (inset) => {
+      await page.evaluate(
+        (value) => window.pdfNavigationTest.setInset(value),
+        inset
+      )
+      await gotoPage(7)
+      await chapterLink.waitFor()
+      assert.equal(
+        await chapterLink.getAttribute('title'),
+        '第一章 揭开网络引战的面纱'
+      )
+      await chapterLink.click()
+      await page
+        .locator('.pdfViewer .page')
+        .nth(21)
+        .locator('.textLayer span')
+        .first()
+        .waitFor({ timeout: 60000 })
+      await page.evaluate(
+        () =>
+          new Promise((done) =>
+            requestAnimationFrame(() => requestAnimationFrame(done))
+          )
+      )
+      return measureChapterTop()
+    }
+    const insets = [65, 0]
+    const measured = {}
+    for (const inset of insets) measured[inset] = await clickChapter(inset)
+    const withInset = measured[65]
+    const withoutInset = measured[0]
+    assert(
+      withInset.titleTop - withInset.hostTop >= 64,
+      `inset 65 must keep the chapter title below the safe top: ${JSON.stringify(withInset)}`
+    )
+    assert(
+      withoutInset.titleTop - withoutInset.hostTop < 10,
+      `inset 0 must leave the chapter title at the container top: ${JSON.stringify(withoutInset)}`
+    )
+    assert(
+      withInset.titleTop - withoutInset.titleTop > 60,
+      'a 65px inset must move the embedded-link destination down by 65px'
+    )
+    report.checks.push({
+      name: 'embedded TOC link respects the reader top inset',
+      withoutInset,
+      withInset
+    })
+    await page.screenshot({ path: resolve(output, 'outline-inset.png') })
+  } else {
+    report.checks.push({
+      name: 'embedded TOC link respects the reader top inset',
+      skipped: 'PDF_NAVIGATION_OUTLINE_PDF is not set'
+    })
+  }
   await page.goto(
     `http://127.0.0.1:${server.httpServer.address().port}/pdf-navigation`
   )
